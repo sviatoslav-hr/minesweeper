@@ -1,7 +1,7 @@
-import { isInsideRect, v2Clone, type Rect } from '$math';
+import { isInsideRect, v2Clone, type Rect, type Vec2 } from '$math';
 import { KeyboardInput } from './input';
 import { random, type Random } from './random';
-import { Renderer2d } from './renderer';
+import { Renderer2d, type FontRendered } from './renderer';
 import './style.css';
 
 const Color = {
@@ -29,6 +29,7 @@ declare global {
 
 type Minesweeper = {
 	field: Minefield;
+	minesCount: number;
 	generated: boolean;
 };
 
@@ -39,14 +40,17 @@ type Minefield = {
 	flags: number[][];
 };
 
+const PADDING_WINDOW = 0.05;
+const PADDING_CELL = 0.1;
+
 async function main(): Promise<void> {
-	console.log('Game version 0.1');
+	console.log('[INFO]: Game version 0.1');
 	initColors();
 	const appElement = document.getElementById('app');
 	const storage: Storage = localStorage;
 
 	if (!appElement) {
-		console.error('App element not found');
+		console.error('[ERROR]: App element not found');
 		return;
 	}
 
@@ -56,7 +60,7 @@ async function main(): Promise<void> {
 	appElement.appendChild(canvas);
 	const context = canvas.getContext('2d');
 	if (!context) {
-		console.error('Canvas context not supported');
+		console.error('[ERROR]: Canvas context not supported');
 		return;
 	}
 
@@ -84,21 +88,22 @@ async function main(): Promise<void> {
 
 	const cols = 30;
 	const rows = 16;
-	const minesCount = 200;
 	random.reset(String(Date.now()));
 
 	const tick = () => {
 		if (!globalThis.minesweeper) {
-			console.log('Initializing minesweeper');
+			console.log('[INFO]: Initializing minesweeper');
 			globalThis.minesweeper = {
 				field: emptyMinefield(rows, cols),
+				minesCount: 0,
 				generated: false,
 			};
 		}
 		if (input.isPressed('KeyR')) {
-			console.log('Resetting minesweeper');
+			console.log('[INFO]: Resetting minesweeper');
 			globalThis.minesweeper = {
 				field: emptyMinefield(rows, cols),
+				minesCount: 0,
 				generated: false,
 			};
 		}
@@ -106,118 +111,25 @@ async function main(): Promise<void> {
 		const minefield = minesweeper.field;
 
 		r.fillScreen(Color.BACKGROUND);
-		const PADDING_WINDOW = 0.05;
-		const PADDING_CELL = 0.1;
-		const windowPadding =
-			Math.min(canvas.width, canvas.height) * PADDING_WINDOW;
-		const containerWidth = canvas.width - windowPadding * 2;
-		const containerHeight = canvas.height - windowPadding * 2;
-		const rawCellWidth = containerWidth / cols;
-		const rawCellHeight = containerHeight / rows;
-		const rawCellSize = Math.min(rawCellWidth, rawCellHeight);
-		const cellPadding = rawCellSize * PADDING_CELL;
-		const cellSizeX = (containerWidth - cellPadding * (cols - 1)) / cols;
-		const cellSizeY = (containerHeight - cellPadding * (rows - 1)) / rows;
-		const cellSize = Math.min(cellSizeX, cellSizeY);
-		const gridWidth = cols * cellSize + (cols - 1) * cellPadding;
-		const gridHeight = rows * cellSize + (rows - 1) * cellPadding;
-		const gridXOffset = (canvas.width - gridWidth) / 2;
-		const gridYOffset = (canvas.height - gridHeight) / 2;
 
-		const mouse = input.getMousePosition();
-		let isHoveringAny = false;
+		const config = computeConfig(canvas, minesweeper, flagImage, mineImage);
+		let isAnyHovered = false;
 
-		const fontSize = cellSize * 0.8;
-		r.setFont({ size: fontSize, weight: 700, family: 'Arial' });
-		r.context.textBaseline = 'middle';
-		r.context.textAlign = 'center';
+		r.setFont(config.font);
+		r.context.textBaseline = config.textBaseline;
+		r.context.textAlign = config.textAlign;
 
 		for (let row = 0; row < rows; row++) {
 			for (let col = 0; col < cols; col++) {
-				const index = indexOf(row, col, cols);
-				const x = gridXOffset + col * cellSize + col * cellPadding;
-				const y = gridYOffset + row * cellSize + row * cellPadding;
-				const rect: Rect = { x, y, width: cellSize, height: cellSize };
-				const center = { x: x + cellSize / 2, y: y + cellSize / 2 };
-				const isHovering = isInsideRect(mouse, rect);
-				isHoveringAny ||= isHovering;
-				let flagged =
-					minesweeper.field.flags[row][col] === Flags.FLAGGED;
-				let revealed =
-					minesweeper.field.flags[row][col] === Flags.REVEALED;
-				if (isHovering && !revealed && minesweeper.generated) {
-					if (!flagged && input.isPressed('MouseLeft')) {
-						revealed = true;
-						revealCell(minefield, row, col);
-						console.log(`Revealed cell at ${row}:${col}`);
-					}
-					if (input.isPressed('MouseRight')) {
-						console.log(`Flagged cell at ${row}:${col}`);
-						flagged = !flagged;
-						minesweeper.field.flags[row][col] = flagged
-							? Flags.FLAGGED
-							: Flags.UNFLAGGED;
-					}
-				}
-				if (
-					isHovering &&
-					!revealed &&
-					!minesweeper.generated &&
-					input.isPressed('MouseLeft')
-				) {
-					console.log('Generating minefield...');
-					minesweeper.generated = true;
-					minesweeper.field = generateMinefield(
-						random,
-						rows,
-						cols,
-						minesCount,
-						index,
-					);
-					revealCell(minesweeper.field, row, col);
-					revealed = true;
-				}
-
-				let cellColor =
-					revealed || flagged
-						? Color.CELL_REVEALED
-						: isHovering
-							? Color.CELL_HOVER
-							: Color.CELL;
-
-				const value = minefield.data[row][col];
-				const radius = 4;
-				if (revealed || input.isDown('Space')) {
-					if (value === MINE) {
-						r.drawRectRounded(rect, radius, cellColor);
-						r.drawImage(mineImage, x, y, cellSize, cellSize);
-					} else if (value > 0) {
-						cellColor = numberToColor(value);
-						r.drawRectRounded(rect, radius, cellColor);
-						const text = String(value);
-						const textPosition = v2Clone(center);
-						const textMetrics = r.measureText(text);
-						const ascentDiff =
-							textMetrics.actualBoundingBoxAscent -
-							textMetrics.actualBoundingBoxDescent;
-						// const heightDiff =
-						// 	cellSize - textMetrics.actualBoundingBoxAscent;
-						textPosition.y += ascentDiff / 2;
-						r.drawText(text, textPosition, Color.TEXT);
-					} else {
-						r.drawRectRounded(rect, radius, cellColor);
-					}
-				} else if (flagged) {
-					r.drawRectRounded(rect, radius, cellColor);
-					r.drawImage(flagImage, x, y, cellSize, cellSize);
-				} else {
-					r.drawRectRounded(rect, radius, cellColor);
-				}
+				const cell = computeCell(config, minefield, col, row);
+				isAnyHovered ||= cell.hovered;
+				handleCellInput(minesweeper, input, cell);
+				drawCell(r, input, config, minefield, cell);
 			}
 		}
 
 		// PERF: Check if its fine to be constantly updating the style.
-		if (isHoveringAny) {
+		if (isAnyHovered) {
 			document.body.style.cursor = 'pointer';
 		} else {
 			document.body.style.cursor = 'default';
@@ -227,6 +139,205 @@ async function main(): Promise<void> {
 		requestAnimationFrame(tick);
 	};
 	requestAnimationFrame(tick);
+}
+
+type GameConfig = {
+	cellSize: number;
+	cellPadding: number;
+	gridWidth: number;
+	gridHeight: number;
+	gridXOffset: number;
+	gridYOffset: number;
+	font: FontRendered;
+	textBaseline: CanvasTextBaseline;
+	textAlign: CanvasTextAlign;
+	flagImage: HTMLImageElement;
+	mineImage: HTMLImageElement;
+};
+
+function computeConfig(
+	canvas: HTMLCanvasElement,
+	minesweeper: Minesweeper,
+	flagImage: HTMLImageElement,
+	mineImage: HTMLImageElement,
+): GameConfig {
+	const { rows, cols } = minesweeper.field;
+	const windowPadding =
+		Math.min(canvas.width, canvas.height) * PADDING_WINDOW;
+	const containerWidth = canvas.width - windowPadding * 2;
+	const containerHeight = canvas.height - windowPadding * 2;
+	const rawCellWidth = containerWidth / cols;
+	const rawCellHeight = containerHeight / cols;
+	const rawCellSize = Math.min(rawCellWidth, rawCellHeight);
+	const cellPadding = rawCellSize * PADDING_CELL;
+	const cellSizeX = (containerWidth - cellPadding * (cols - 1)) / cols;
+	const cellSizeY = (containerHeight - cellPadding * (rows - 1)) / rows;
+	const cellSize = Math.min(cellSizeX, cellSizeY);
+	const gridWidth = cols * cellSize + (cols - 1) * cellPadding;
+	const gridHeight = rows * cellSize + (rows - 1) * cellPadding;
+	const gridXOffset = (canvas.width - gridWidth) / 2;
+	const gridYOffset = (canvas.height - gridHeight) / 2;
+
+	const fontSize = cellSize * 0.8;
+	const font: FontRendered = { size: fontSize, weight: 700, family: 'Arial' };
+	return {
+		cellSize,
+		cellPadding,
+		gridWidth,
+		gridHeight,
+		gridXOffset,
+		gridYOffset,
+		flagImage,
+		mineImage,
+		font,
+		textBaseline: 'middle',
+		textAlign: 'center',
+	};
+}
+
+type CellInfo = {
+	row: number;
+	col: number;
+	x: number;
+	y: number;
+	rect: Rect;
+	center: Vec2;
+	hovered: boolean;
+	revealed: boolean;
+	flagged: boolean;
+};
+
+function computeCell(
+	config: GameConfig,
+	minefield: Minefield,
+	col: number,
+	row: number,
+): CellInfo {
+	const x =
+		config.gridXOffset + col * config.cellSize + col * config.cellPadding;
+	const y =
+		config.gridYOffset + row * config.cellSize + row * config.cellPadding;
+	const rect: Rect = {
+		x,
+		y,
+		width: config.cellSize,
+		height: config.cellSize,
+	};
+	const center = {
+		x: x + config.cellSize / 2,
+		y: y + config.cellSize / 2,
+	};
+	const flagged = minefield.flags[row][col] === Flags.FLAGGED;
+	const revealed = minefield.flags[row][col] === Flags.REVEALED;
+	const cell: CellInfo = {
+		x,
+		y,
+		row,
+		col,
+		rect,
+		center,
+		hovered: false, // is computed in the handler
+		flagged: flagged,
+		revealed: revealed,
+	};
+	return cell;
+}
+
+function handleCellInput(
+	minesweeper: Minesweeper,
+	input: KeyboardInput,
+	cell: CellInfo,
+): void {
+	cell.hovered = isInsideRect(input.getMousePosition(), cell.rect);
+
+	if (cell.hovered && !cell.revealed && minesweeper.generated) {
+		if (!cell.flagged && input.isPressed('MouseLeft')) {
+			cell.revealed = true;
+			revealCell(minesweeper.field, cell.row, cell.col);
+			console.log(`Revealed cell at ${cell.row}:${cell.col}`);
+		}
+		if (input.isPressed('MouseRight')) {
+			console.log(`Flagged cell at ${cell.row}:${cell.col}`);
+			cell.flagged = !cell.flagged;
+			minesweeper.field.flags[cell.row][cell.col] = cell.flagged
+				? Flags.FLAGGED
+				: Flags.UNFLAGGED;
+		}
+	}
+	if (
+		cell.hovered &&
+		!cell.revealed &&
+		!minesweeper.generated &&
+		input.isPressed('MouseLeft')
+	) {
+		console.log('Generating minefield...');
+		minesweeper.generated = true;
+		const index = indexOf(cell.row, cell.col, minesweeper.field.cols);
+		minesweeper.field = generateMinefield(
+			random,
+			minesweeper.field.rows,
+			minesweeper.field.cols,
+			minesweeper.minesCount,
+			index,
+		);
+		revealCell(minesweeper.field, cell.row, cell.col);
+		cell.revealed = true;
+	}
+}
+
+function drawCell(
+	r: Renderer2d,
+	input: KeyboardInput,
+	config: GameConfig,
+	minefield: Minefield,
+	cell: CellInfo,
+): void {
+	let cellColor =
+		cell.revealed || cell.flagged
+			? Color.CELL_REVEALED
+			: cell.hovered
+				? Color.CELL_HOVER
+				: Color.CELL;
+
+	const value = minefield.data[cell.row][cell.col];
+	const radius = 4;
+	if (cell.revealed || input.isDown('Space')) {
+		if (value === MINE) {
+			r.drawRectRounded(cell.rect, radius, cellColor);
+			r.drawImage(
+				config.mineImage,
+				cell.x,
+				cell.y,
+				config.cellSize,
+				config.cellSize,
+			);
+		} else if (value > 0) {
+			cellColor = numberToColor(value);
+			r.drawRectRounded(cell.rect, radius, cellColor);
+			const text = String(value);
+			const textPosition = v2Clone(cell.center);
+			const textMetrics = r.measureText(text);
+			// NOTE: Often ascent and descent are not equal, so we need to center the text vertically.
+			const ascentDiff =
+				textMetrics.actualBoundingBoxAscent -
+				textMetrics.actualBoundingBoxDescent;
+			textPosition.y += ascentDiff / 2;
+			r.drawText(text, textPosition, Color.TEXT);
+		} else {
+			r.drawRectRounded(cell.rect, radius, cellColor);
+		}
+	} else if (cell.flagged) {
+		r.drawRectRounded(cell.rect, radius, cellColor);
+		r.drawImage(
+			config.flagImage,
+			cell.x,
+			cell.y,
+			config.cellSize,
+			config.cellSize,
+		);
+	} else {
+		r.drawRectRounded(cell.rect, radius, cellColor);
+	}
 }
 
 main();

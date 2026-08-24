@@ -9,7 +9,11 @@ type TextMetricsRendered = {
 	actualBoundingBoxDescent: number;
 };
 type FontWeight = 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
-type FontRendered = { size: number; weight?: FontWeight; family: string };
+export type FontRendered = {
+	size: number;
+	weight?: FontWeight;
+	family: string;
+};
 
 export class Renderer2d {
 	context: CanvasRenderingContext2D;
