@@ -185,15 +185,15 @@ async function main(): Promise<void> {
 							? Color.CELL_HOVER
 							: Color.CELL;
 
-				// TODO: Rounded rect!
 				const value = minefield.data[row][col];
+				const radius = 4;
 				if (revealed || input.isDown('Space')) {
 					if (value === MINE) {
-						r.drawRect(rect, cellColor);
+						r.drawRectRounded(rect, radius, cellColor);
 						r.drawImage(mineImage, x, y, cellSize, cellSize);
 					} else if (value > 0) {
 						cellColor = numberToColor(value);
-						r.drawRect(rect, cellColor);
+						r.drawRectRounded(rect, radius, cellColor);
 						const text = String(value);
 						const textPosition = v2Clone(center);
 						const textMetrics = r.measureText(text);
@@ -205,13 +205,13 @@ async function main(): Promise<void> {
 						textPosition.y += ascentDiff / 2;
 						r.drawText(text, textPosition, Color.TEXT);
 					} else {
-						r.drawRect(rect, cellColor);
+						r.drawRectRounded(rect, radius, cellColor);
 					}
 				} else if (flagged) {
-					r.drawRect(rect, cellColor);
+					r.drawRectRounded(rect, radius, cellColor);
 					r.drawImage(flagImage, x, y, cellSize, cellSize);
 				} else {
-					r.drawRect(rect, cellColor);
+					r.drawRectRounded(rect, radius, cellColor);
 				}
 			}
 		}

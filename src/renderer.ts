@@ -93,6 +93,16 @@ export class Renderer2d {
 		this.context.fillRect(rect.x, rect.y, rect.width, rect.height);
 	}
 
+	drawRectRounded(rect: Rect, radius: number, color: string): void {
+		this.context.fillStyle = color;
+		if (this.camera) {
+			rect = this.camera.toScreenRect(rect);
+		}
+		this.context.beginPath();
+		this.context.roundRect(rect.x, rect.y, rect.width, rect.height, radius);
+		this.context.fill();
+	}
+
 	drawImage(
 		src: CanvasImageSource,
 		dx: number,
