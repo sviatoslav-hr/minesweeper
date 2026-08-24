@@ -5,8 +5,11 @@ type TextMetricsRendered = {
 	width: number;
 	/** Distance from the horizontal line indicated by the `textBaseline` attribute to the top of the bounding rectangle used to render the text, in CSS pixels. */
 	actualBoundingBoxAscent: number;
+	/** Distance from the horizontal line indicated by the `textBaseline` attribute to the bottom of the bounding rectangle used to render the text, in CSS pixels. */
+	actualBoundingBoxDescent: number;
 };
-type FontRendered = { size: number; family: string };
+type FontWeight = 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+type FontRendered = { size: number; weight?: FontWeight; family: string };
 
 export class Renderer2d {
 	context: CanvasRenderingContext2D;
@@ -28,7 +31,8 @@ export class Renderer2d {
 			this.fontBeforeCameraMode = font;
 			font = { ...font, size: font.size * this.camera.scale };
 		}
-		const fontStr = `${font.size}px ${font.family}`;
+		const weight = font.weight ?? 400;
+		const fontStr = ` ${weight} ${font.size}px ${font.family}`;
 		this.font = font;
 		this.context.font = fontStr;
 	}
@@ -89,6 +93,27 @@ export class Renderer2d {
 		this.context.fillRect(rect.x, rect.y, rect.width, rect.height);
 	}
 
+	drawImage(
+		src: CanvasImageSource,
+		dx: number,
+		dy: number,
+		dw: number,
+		dh: number,
+	): void {
+		let dest: Rect = { x: dx, y: dy, width: dw, height: dh };
+		if (this.camera != null) {
+			if (!isRectVisible(this.camera, dest)) {
+				return;
+			} else {
+				dest = this.camera.toScreenRect(dest);
+			}
+		}
+		// drawImage(image: CanvasImageSource, dx: number, dy: number): void;
+		// drawImage(image: CanvasImageSource, dx: number, dy: number, dw: number, dh: number): void;
+		// drawImage(image: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, dx: number, dy: number, dw: number, dh: number): void;
+		this.context.drawImage(src, dest.x, dest.y, dest.width, dest.height);
+	}
+
 	drawLine(start: Vec2, end: Vec2, color: string, lineWidth = 1) {
 		this.context.strokeStyle = color;
 		this.context.lineWidth = lineWidth;
@@ -116,10 +141,12 @@ export class Renderer2d {
 		const metrics: TextMetricsRendered = {
 			width: metricsScreen.width,
 			actualBoundingBoxAscent: metricsScreen.actualBoundingBoxAscent,
+			actualBoundingBoxDescent: metricsScreen.actualBoundingBoxDescent,
 		};
 		if (this.camera) {
 			metrics.width /= this.camera.scale;
 			metrics.actualBoundingBoxAscent /= this.camera.scale;
+			metrics.actualBoundingBoxDescent /= this.camera.scale;
 		}
 		return metrics;
 	}
@@ -191,4 +218,18 @@ export class Camera {
 			(screenY - this.screenOffset.y) / this.scale + this.worldOffset.y;
 		return worldY;
 	}
+}
+
+function isRectVisible(camera: Camera, rect: Rect): boolean {
+	let { x, y, width, height } = rect;
+	x = camera.toScreenX(x);
+	y = camera.toScreenY(y);
+	width *= camera.scale;
+	height *= camera.scale;
+	return (
+		x < camera.screenOffset.x + width &&
+		y < camera.screenOffset.y + height &&
+		x + width > camera.screenOffset.x &&
+		y + height > camera.screenOffset.y
+	);
 }

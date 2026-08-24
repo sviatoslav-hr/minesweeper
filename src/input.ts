@@ -193,7 +193,7 @@ export class KeyboardInput {
 		this.mouse.currentWheenDelta = ev.deltaY;
 	};
 
-	listen(element: HTMLElement, mouseElement: HTMLElement) {
+	listen(element: HTMLElement, mouseElement: HTMLElement = element) {
 		element.addEventListener('keydown', this.handleKeyDown);
 		// FIXME: If between ticks happen both keydown and keyup events, the keypress will be missed
 		element.addEventListener('keyup', this.handleKeyUp);

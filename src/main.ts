@@ -1,4 +1,4 @@
-import { isInsideRect, scaleRectCentered, type Rect } from '$math';
+import { isInsideRect, v2Clone, type Rect } from '$math';
 import { KeyboardInput } from './input';
 import { random, type Random } from './random';
 import { Renderer2d } from './renderer';
@@ -8,12 +8,42 @@ const Color = {
 	BACKGROUND: '--color-bg',
 	CELL: '--color-cell',
 	CELL_HOVER: '--color-cell-hover',
+	CELL_REVEALED: '--color-cell-revealed',
 	TEXT: '--color-text',
+	NUMBER1: '--color-number-1',
+	NUMBER2: '--color-number-2',
+	NUMBER3: '--color-number-3',
+	NUMBER4: '--color-number-4',
+	NUMBER5: '--color-number-5',
+	NUMBER6: '--color-number-6',
+	NUMBER7: '--color-number-7',
+	NUMBER8: '--color-number-8',
+};
+const ColorVar = {
+	...Color,
+} as const;
+
+declare global {
+	var minesweeper: Minesweeper | undefined;
+}
+
+type Minesweeper = {
+	field: Minefield;
+	generated: boolean;
 };
 
-function main(): void {
+type Minefield = {
+	rows: number;
+	cols: number;
+	data: number[][];
+	flags: number[][];
+};
+
+async function main(): Promise<void> {
+	console.log('Game version 0.1');
 	initColors();
 	const appElement = document.getElementById('app');
+	const storage: Storage = localStorage;
 
 	if (!appElement) {
 		console.error('App element not found');
@@ -21,6 +51,8 @@ function main(): void {
 	}
 
 	const canvas = document.createElement('canvas');
+	// Disable context menu from appearing on right-click
+	canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 	appElement.appendChild(canvas);
 	const context = canvas.getContext('2d');
 	if (!context) {
@@ -28,29 +60,52 @@ function main(): void {
 		return;
 	}
 
+	const savedMinesweeper = storage.getItem('minesweeper');
+	if (savedMinesweeper) {
+		globalThis.minesweeper = JSON.parse(savedMinesweeper);
+	}
+
+	const { flag: flagImage, mine: mineImage } = await loadImages();
+
 	const r = new Renderer2d(context);
 	r.resizeCanvas(window.innerWidth, window.innerHeight);
-	r.context.textBaseline = 'middle';
-	r.context.textAlign = 'center';
 
 	window.addEventListener('resize', () => {
 		r.resizeCanvas(window.innerWidth, window.innerHeight);
 	});
+	window.addEventListener('beforeunload', () => {
+		if (minesweeper) {
+			storage.setItem('minesweeper', JSON.stringify(minesweeper));
+		}
+	});
 
 	const input = new KeyboardInput();
-	input.listen(appElement, document.body);
+	input.listen(document.body, document.body);
 
 	const cols = 30;
 	const rows = 16;
-	const minesCount = 99;
-	const minefield = generateMinefield(random, rows, cols, minesCount);
+	const minesCount = 200;
+	random.reset(String(Date.now()));
 
-	let prevTime = 0;
-	const tick = (time: number) => {
-		const deltaTime = time - prevTime;
-		prevTime = time;
+	const tick = () => {
+		if (!globalThis.minesweeper) {
+			console.log('Initializing minesweeper');
+			globalThis.minesweeper = {
+				field: emptyMinefield(rows, cols),
+				generated: false,
+			};
+		}
+		if (input.isPressed('KeyR')) {
+			console.log('Resetting minesweeper');
+			globalThis.minesweeper = {
+				field: emptyMinefield(rows, cols),
+				generated: false,
+			};
+		}
+		const minesweeper = globalThis.minesweeper;
+		const minefield = minesweeper.field;
 
-		r.fillScreen(Color.TEXT);
+		r.fillScreen(Color.BACKGROUND);
 		const PADDING_WINDOW = 0.05;
 		const PADDING_CELL = 0.1;
 		const windowPadding =
@@ -73,26 +128,90 @@ function main(): void {
 		let isHoveringAny = false;
 
 		const fontSize = cellSize * 0.8;
-		const mainFont = { size: fontSize, family: 'Arial' };
-		r.setFont(mainFont);
+		r.setFont({ size: fontSize, weight: 700, family: 'Arial' });
+		r.context.textBaseline = 'middle';
+		r.context.textAlign = 'center';
 
 		for (let row = 0; row < rows; row++) {
 			for (let col = 0; col < cols; col++) {
+				const index = indexOf(row, col, cols);
 				const x = gridXOffset + col * cellSize + col * cellPadding;
 				const y = gridYOffset + row * cellSize + row * cellPadding;
 				const rect: Rect = { x, y, width: cellSize, height: cellSize };
 				const center = { x: x + cellSize / 2, y: y + cellSize / 2 };
 				const isHovering = isInsideRect(mouse, rect);
 				isHoveringAny ||= isHovering;
-				const color = isHovering ? Color.CELL_HOVER : Color.CELL;
-				r.drawRect(rect, color);
-				const hasMine = minefield.mines[row][col] === 1;
-				if (hasMine) {
-					r.drawRect(scaleRectCentered(rect, 0.8), 'blue');
+				let flagged =
+					minesweeper.field.flags[row][col] === Flags.FLAGGED;
+				let revealed =
+					minesweeper.field.flags[row][col] === Flags.REVEALED;
+				if (isHovering && !revealed && minesweeper.generated) {
+					if (!flagged && input.isPressed('MouseLeft')) {
+						revealed = true;
+						revealCell(minefield, row, col);
+						console.log(`Revealed cell at ${row}:${col}`);
+					}
+					if (input.isPressed('MouseRight')) {
+						console.log(`Flagged cell at ${row}:${col}`);
+						flagged = !flagged;
+						minesweeper.field.flags[row][col] = flagged
+							? Flags.FLAGGED
+							: Flags.UNFLAGGED;
+					}
 				}
-				const value = minefield.view[row][col];
-				if (!hasMine && value > 0) {
-					r.drawText(value.toString(), center, Color.TEXT);
+				if (
+					isHovering &&
+					!revealed &&
+					!minesweeper.generated &&
+					input.isPressed('MouseLeft')
+				) {
+					console.log('Generating minefield...');
+					minesweeper.generated = true;
+					minesweeper.field = generateMinefield(
+						random,
+						rows,
+						cols,
+						minesCount,
+						index,
+					);
+					revealCell(minesweeper.field, row, col);
+					revealed = true;
+				}
+
+				let cellColor =
+					revealed || flagged
+						? Color.CELL_REVEALED
+						: isHovering
+							? Color.CELL_HOVER
+							: Color.CELL;
+
+				// TODO: Rounded rect!
+				const value = minefield.data[row][col];
+				if (revealed || input.isDown('Space')) {
+					if (value === MINE) {
+						r.drawRect(rect, cellColor);
+						r.drawImage(mineImage, x, y, cellSize, cellSize);
+					} else if (value > 0) {
+						cellColor = numberToColor(value);
+						r.drawRect(rect, cellColor);
+						const text = String(value);
+						const textPosition = v2Clone(center);
+						const textMetrics = r.measureText(text);
+						const ascentDiff =
+							textMetrics.actualBoundingBoxAscent -
+							textMetrics.actualBoundingBoxDescent;
+						// const heightDiff =
+						// 	cellSize - textMetrics.actualBoundingBoxAscent;
+						textPosition.y += ascentDiff / 2;
+						r.drawText(text, textPosition, Color.TEXT);
+					} else {
+						r.drawRect(rect, cellColor);
+					}
+				} else if (flagged) {
+					r.drawRect(rect, cellColor);
+					r.drawImage(flagImage, x, y, cellSize, cellSize);
+				} else {
+					r.drawRect(rect, cellColor);
 				}
 			}
 		}
@@ -104,6 +223,7 @@ function main(): void {
 			document.body.style.cursor = 'default';
 		}
 
+		input.nextTick();
 		requestAnimationFrame(tick);
 	};
 	requestAnimationFrame(tick);
@@ -112,53 +232,95 @@ function main(): void {
 main();
 
 function initColors(): void {
-	const rootStyles = getComputedStyle(document.documentElement);
-	for (const [colorName, varName] of Object.entries(Color)) {
-		const colorValue = rootStyles.getPropertyValue(varName);
+	setColors(getComputedStyle(document.documentElement));
+	if (import.meta.hot) {
+		import.meta.hot.on('vite:afterUpdate', () => {
+			console.log('Styles hot reloaded');
+			setColors(getComputedStyle(document.documentElement));
+		});
+	}
+}
+
+function setColors(styles: CSSStyleDeclaration): void {
+	for (const [colorName, varName] of Object.entries(ColorVar)) {
+		const colorValue = styles.getPropertyValue(varName);
 		if (colorValue) {
 			Color[colorName as keyof typeof Color] = colorValue;
 		} else {
-			console.warn(`Color "${colorName}" not found`);
+			console.warn(`Color "${colorName}" not found for "${varName}"`);
 		}
 	}
 }
 
-type Minefield = {
-	rows: number;
-	cols: number;
-	mines: number[][];
-	view: number[][];
-};
+// [N, NE, E, SE, S, SW, W, NW]
+const OFFSETS = [
+	[-1, 0],
+	[-1, 1],
+	[0, 1],
+	[1, 1],
+	[1, 0],
+	[1, -1],
+	[0, -1],
+	[-1, -1],
+];
+const MINE = -1;
+const NONE = 0;
+const Flags = {
+	UNFLAGGED: 0,
+	FLAGGED: 1,
+	REVEALED: 2,
+} as const;
+
 function generateMinefield(
 	random: Random,
 	rows: number,
 	cols: number,
 	minesCount: number,
+	targetIndex: number,
 ): Minefield {
-	const cells = Array.from({ length: rows }, () => Array(cols).fill(0));
+	const data = Array.from({ length: rows }, () => Array(cols).fill(0));
 	const cellsCount = rows * cols;
-	for (let i = 0; i < minesCount; i++) {
-		const mineIndex = random.int32Range(0, cellsCount);
-		const mineRow = Math.floor(mineIndex / cols);
-		const mineCol = mineIndex % cols;
-		cells[mineRow][mineCol] = 1;
+	const maxAttempts = 10;
+	let skipIndexes: number[] = [targetIndex];
+	{
+		const targetRow = rowOf(targetIndex, cols);
+		const targetCol = colOf(targetIndex, cols);
+		for (const [rowOffset, colOffset] of OFFSETS) {
+			const index = indexOf(
+				targetRow + rowOffset,
+				targetCol + colOffset,
+				cols,
+			);
+			skipIndexes.push(index);
+		}
 	}
-	const view = Array.from({ length: rows }, () => Array(cols));
-	// [N, NE, E, SE, S, SW, W, NW]
-	const offsets = [
-		[-1, 0],
-		[-1, 1],
-		[0, 1],
-		[1, 1],
-		[1, 0],
-		[1, -1],
-		[0, -1],
-		[-1, -1],
-	];
+	for (let i = 0; i < minesCount; i++) {
+		let attempts = 0;
+		while (attempts < maxAttempts) {
+			const tileIndex = random.int32Range(0, cellsCount);
+			const tileRow = rowOf(tileIndex, cols);
+			const tileCol = colOf(tileIndex, cols);
+			if (
+				data[tileRow][tileCol] === 0 &&
+				!skipIndexes.includes(tileIndex)
+			) {
+				data[tileRow][tileCol] = MINE;
+				break;
+			}
+			attempts++;
+		}
+		if (attempts === maxAttempts) {
+			console.error(
+				`Failed to place mine at ${i + 1} of ${minesCount}, skipping.`,
+			);
+		}
+	}
+
 	for (let row = 0; row < rows; row++) {
 		for (let col = 0; col < cols; col++) {
+			if (data[row][col] === MINE) continue;
 			let neighborMines = 0;
-			for (const [rowOffset, colOffset] of offsets) {
+			for (const [rowOffset, colOffset] of OFFSETS) {
 				const neighborRow = row + rowOffset;
 				const neighborCol = col + colOffset;
 				if (
@@ -166,13 +328,94 @@ function generateMinefield(
 					neighborRow < rows &&
 					neighborCol >= 0 &&
 					neighborCol < cols &&
-					cells[neighborRow][neighborCol] === 1
+					data[neighborRow][neighborCol] === MINE
 				) {
 					neighborMines += 1;
 				}
 			}
-			view[row][col] = neighborMines;
+			data[row][col] = neighborMines;
 		}
 	}
-	return { rows, cols, mines: cells, view };
+
+	const flags = Array.from({ length: rows }, () => Array(cols));
+	return { rows, cols, data, flags };
+}
+
+function emptyMinefield(rows: number, cols: number): Minefield {
+	return {
+		rows,
+		cols,
+		data: Array.from({ length: rows }, () => Array(cols).fill(NONE)),
+		flags: Array.from({ length: rows }, () =>
+			Array(cols).fill(Flags.UNFLAGGED),
+		),
+	};
+}
+
+function revealCell(minefield: Minefield, row: number, col: number): boolean {
+	if (minefield.flags[row][col] === Flags.FLAGGED) return false;
+	if (minefield.flags[row][col] === Flags.REVEALED) return false;
+	const value = minefield.data[row][col];
+	minefield.flags[row][col] = Flags.REVEALED;
+	if (value === MINE) return true;
+	if (value === NONE) {
+		for (const [offsetRow, offsetCol] of OFFSETS) {
+			const neighborRow = row + offsetRow;
+			const neighborCol = col + offsetCol;
+			if (
+				neighborRow >= 0 &&
+				neighborRow < minefield.rows &&
+				neighborCol >= 0 &&
+				neighborCol < minefield.cols
+			) {
+				revealCell(minefield, neighborRow, neighborCol);
+			}
+		}
+	}
+	return false;
+}
+
+function indexOf(row: number, col: number, cols: number): number {
+	return row * cols + col;
+}
+function rowOf(index: number, cols: number): number {
+	return Math.floor(index / cols);
+}
+function colOf(index: number, cols: number): number {
+	return index % cols;
+}
+
+function numberToColor(number: number): string {
+	switch (number) {
+		case 1:
+			return Color.NUMBER1;
+		case 2:
+			return Color.NUMBER2;
+		case 3:
+			return Color.NUMBER3;
+		case 4:
+			return Color.NUMBER4;
+		case 5:
+			return Color.NUMBER5;
+		case 6:
+			return Color.NUMBER6;
+		case 7:
+			return Color.NUMBER7;
+		case 8:
+			return Color.NUMBER8;
+		default:
+			return Color.NUMBER1;
+	}
+}
+
+async function loadImages(): Promise<{
+	flag: HTMLImageElement;
+	mine: HTMLImageElement;
+}> {
+	const flagImage = new Image();
+	flagImage.src = './flag.png';
+	const mineImage = new Image();
+	mineImage.src = './mine.png';
+	await Promise.all([flagImage.decode(), mineImage.decode()]);
+	return { flag: flagImage, mine: mineImage };
 }
