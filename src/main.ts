@@ -216,6 +216,7 @@ type CellInfo = {
 	hovered: boolean;
 	revealed: boolean;
 	flagged: boolean;
+	hinted: boolean;
 	value: number;
 };
 
@@ -251,6 +252,7 @@ function computeCell(
 		rect,
 		center,
 		hovered: false, // is computed in the handler
+		hinted: false, // is computed in the handler
 		flagged: flagged,
 		revealed: revealed,
 	};
@@ -266,6 +268,9 @@ function handleCellInput(
 	if (cell.revealed && cell.value === NONE) {
 		cell.hovered = false;
 	}
+	// TODO: Instead of always have this as a shortcut, have a button that activates "hint" mode
+	//       and display the amount of hints used in a game to make player conscious of using them.
+	cell.hinted = cell.hovered && input.isDown('KeyH');
 
 	if (minesweeper.generated && cell.hovered && !cell.revealed) {
 		if (!cell.flagged && input.isPressed('MouseLeft')) {
@@ -345,7 +350,10 @@ function drawCell(
 			config.cellSize,
 			config.cellSize,
 		);
-	} else if (value === MINE && (minesweeper.done || config.debugReveal)) {
+	} else if (
+		value === MINE &&
+		(minesweeper.done || config.debugReveal || cell.hinted)
+	) {
 		if (cell.revealed) {
 			cellColor = Color.CELL_EXPLODED;
 		} else {
@@ -357,7 +365,7 @@ function drawCell(
 				? config.images.mineExploded
 				: config.images.mine;
 		r.drawImage(image, cell.x, cell.y, config.cellSize, config.cellSize);
-	} else if (cell.revealed || config.debugReveal) {
+	} else if (cell.revealed || config.debugReveal || cell.hinted) {
 		if (value === NONE) {
 			r.drawRectRounded(cell.rect, CELL_RADIUS, Color.CELL_EMPTY);
 		} else {

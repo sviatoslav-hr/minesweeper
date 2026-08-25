@@ -2,16 +2,16 @@
 	--color-bg: #302d30;
 	--color-cell: #c0bdc0;
 	--color-cell-empty: #908a90;
-	--color-cell-hover: #a9a5a9;
+	--color-cell-hover: #dbd9db;
 	--color-cell-wrong: #ff6060;
 	--color-cell-exploded: #fac4c4;
 	--color-text: #242424;
-	--color-number-1: #add2ff; /* #0000ff;*/
-	--color-number-2: #ace2ac; /* #00ff00;*/
-	--color-number-3: #fefeb4; /* #ffff00;*/
+	--color-number-1: #add2ff;
+	--color-number-2: #ace2ac;
+	--color-number-3: #fefeb4;
 	--color-number-4: #f2c299;
 	--color-number-5: #f0a3a3;
-	--color-number-6: #a0f9f9; /*#00ffff;*/
+	--color-number-6: #b2fbfe;
 	--color-number-7: #f3a8f3;
 	--color-number-8: #cd86ed;
 }
