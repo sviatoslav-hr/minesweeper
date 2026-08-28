@@ -43,8 +43,8 @@ type Minesweeper = {
 type Minefield = {
 	rows: number;
 	cols: number;
-	data: number[][];
-	flags: number[][];
+	data: number[][]; // -1 = mine, 0 = empty, 1-8 = number of mines around
+	flags: number[][]; // 0 = unknown, 1 = flagged, 2 = revealed
 };
 
 const PADDING_WINDOW = 0.05;
@@ -103,6 +103,8 @@ async function main(): Promise<void> {
 	const cols = DEFAULT_COLS;
 	random.reset(String(Date.now()));
 
+	let showSolverFlags = false;
+
 	const tick = () => {
 		if (!globalThis.minesweeper || input.isPressed('KeyR')) {
 			console.log('INFO: Initializing minesweeper');
@@ -133,14 +135,16 @@ async function main(): Promise<void> {
 			};
 		}
 
-		const showSolverFlags = input.isDown('KeyS');
+		if (input.isPressed('KeyS')) {
+			showSolverFlags = !showSolverFlags;
+		}
 		minesweeper.field.flags = showSolverFlags ? minesweeper.solverFlags : minesweeper.playerFlags;
 
 		if (input.isPressed('KeyE')) {
 			trySolve(minesweeper);
 		}
 		if (input.isPressed('KeyQ')) {
-			resetSolver(minesweeper);
+			resetSolverFlags(minesweeper);
 		}
 
 		r.setFont(config.font);
@@ -414,7 +418,7 @@ const OFFSETS = [
 const MINE = -1;
 const NONE = 0;
 const Flags = {
-	UNFLAGGED: 0,
+	UNKNOWN: 0,
 	FLAGGED: 1,
 	REVEALED: 2,
 } as const;
@@ -476,7 +480,7 @@ function generateMinefield(
 		}
 	}
 
-	const flags = Array.from({ length: rows }, () => Array(cols).fill(Flags.UNFLAGGED));
+	const flags = Array.from({ length: rows }, () => Array(cols).fill(Flags.UNKNOWN));
 	return { rows, cols, data, flags };
 }
 
@@ -485,11 +489,12 @@ function emptyMinefield(rows: number, cols: number): Minefield {
 		rows,
 		cols,
 		data: Array.from({ length: rows }, () => Array(cols).fill(NONE)),
-		flags: Array.from({ length: rows }, () => Array(cols).fill(Flags.UNFLAGGED)),
+		flags: Array.from({ length: rows }, () => Array(cols).fill(Flags.UNKNOWN)),
 	};
 }
 
 function revealCell(minefield: Minefield, row: number, col: number): boolean {
+	if (!isInsideMinefield(minefield, row, col)) return false;
 	if (minefield.flags[row][col] === Flags.FLAGGED) return false;
 	if (minefield.flags[row][col] === Flags.REVEALED) return false;
 	const value = minefield.data[row][col];
@@ -499,25 +504,24 @@ function revealCell(minefield: Minefield, row: number, col: number): boolean {
 		for (const [offsetRow, offsetCol] of OFFSETS) {
 			const neighborRow = row + offsetRow;
 			const neighborCol = col + offsetCol;
-			if (isInsideMinefield(minefield, row, col)) {
-				revealCell(minefield, neighborRow, neighborCol);
-			}
+			revealCell(minefield, neighborRow, neighborCol);
 		}
 	}
 	return false;
 }
 
-function flagCell(minefield: Minefield, row: number, col: number): void {
+function flagCell(minefield: Minefield, row: number, col: number): boolean {
 	const flag = minefield.flags[row][col];
 	if (flag === Flags.REVEALED) {
 		console.warn(`[WARNING]: Trying to flag a revealed cell at (${row}:${col})`);
-		return;
+		return false;
 	}
 	if (flag === Flags.FLAGGED) {
 		console.warn(`[WARNING]: Trying to flag an already flagged cell at (${row}:${col})`);
-		return;
+		return false;
 	}
 	minefield.flags[row][col] = Flags.FLAGGED;
+	return true;
 }
 
 function unflagCell(minefield: Minefield, row: number, col: number): void {
@@ -526,11 +530,11 @@ function unflagCell(minefield: Minefield, row: number, col: number): void {
 		console.warn(`[WARNING]: Trying to unflag a revealed cell at (${row}:${col})`);
 		return;
 	}
-	if (flag === Flags.UNFLAGGED) {
-		console.warn(`[WARNING]: Trying to unflag an unflagged cell at (${row}:${col})`);
+	if (flag === Flags.UNKNOWN) {
+		console.warn(`[WARNING]: Trying to unflag an unknown cell at (${row}:${col})`);
 		return;
 	}
-	minefield.flags[row][col] = Flags.UNFLAGGED;
+	minefield.flags[row][col] = Flags.UNKNOWN;
 }
 
 function toggleCellFlag(minefield: Minefield, row: number, col: number): void {
@@ -564,7 +568,7 @@ function chordeCell(minefield: Minefield, row: number, col: number): boolean {
 	for (const [offsetRow, offsetCol] of OFFSETS) {
 		const neighborRow = row + offsetRow;
 		const neighborCol = col + offsetCol;
-		if (minefield.flags?.[neighborRow]?.[neighborCol] === Flags.UNFLAGGED) {
+		if (minefield.flags?.[neighborRow]?.[neighborCol] === Flags.UNKNOWN) {
 			const exploded = revealCell(minefield, neighborRow, neighborCol);
 			anyExploded ||= exploded;
 		}
@@ -590,8 +594,34 @@ function getCellValue(minefield: Minefield, row: number, col: number): number | 
 	return minefield.data?.[row]?.[col];
 }
 
+function getCellValueByIndex(minefield: Minefield, index: number): number | undefined {
+	return getCellValue(minefield, rowOf(index, minefield.cols), colOf(index, minefield.cols));
+}
+
 function getCellFlag(minefield: Minefield, row: number, col: number): number | undefined {
 	return minefield.flags?.[row]?.[col];
+}
+
+function getCellFlagByIndex(minefield: Minefield, index: number): number | undefined {
+	return getCellFlag(minefield, rowOf(index, minefield.cols), colOf(index, minefield.cols));
+}
+
+function isCellFlagged(minefield: Minefield, index: number): boolean {
+	return getCellFlagByIndex(minefield, index) === Flags.FLAGGED;
+}
+
+function isCellRevealed(minefield: Minefield, index: number): boolean {
+	return getCellFlagByIndex(minefield, index) === Flags.REVEALED;
+}
+
+function isSolved(minefield: Minefield): boolean {
+	for (let row = 0; row < minefield.rows; row++) {
+		for (let col = 0; col < minefield.cols; col++) {
+			const flag = getCellFlag(minefield, row, col);
+			if (flag === Flags.UNKNOWN) return false;
+		}
+	}
+	return true;
 }
 
 function numberToColor(number: number): string {
@@ -638,197 +668,272 @@ async function loadImages(): Promise<GameImages> {
 	};
 }
 
-type Solver = {
-	maybeFlags: {
-		maybeFlaggedFromIndex: Set<number>;
-	}[][];
-};
+function* neighborIndices(minefield: Minefield, index: number): Generator<number> {
+	for (const [rowOffset, colOffset] of OFFSETS) {
+		const neighborRow = rowOf(index, minefield.cols) + rowOffset;
+		const neighborCol = colOf(index, minefield.cols) + colOffset;
+		if (!isInsideMinefield(minefield, neighborRow, neighborCol)) continue;
+		yield indexOf(neighborRow, neighborCol, minefield.cols);
+	}
+}
+
+function* allIndices(minefield: Minefield): Generator<number> {
+	for (let row = 0; row < minefield.data.length; row++) {
+		for (let col = 0; col < minefield.data[row].length; col++) {
+			yield indexOf(row, col, minefield.cols);
+		}
+	}
+}
 
 function trySolve(minesweeper: Minesweeper): boolean {
 	console.log('[Solver] solving...');
 	const { field: minefield, solverFlags } = minesweeper;
 	const originalFlags = minesweeper.field.flags;
 	minefield.flags = solverFlags;
+
 	const solver: Solver = {
-		maybeFlags: originalFlags.map((r) => r.map(() => ({ maybeFlaggedFromIndex: new Set() }))),
+		minefield,
+		minesCount: minesweeper.minesCount,
+		constraints: [],
+		todoConstraints: [],
+		todoKnownCells: [],
 	};
-	let changed = true;
-	while (changed) {
-		changed = false;
-		const flaggedCount = solveFlagObiousCells(minefield);
-		console.log(`[Solver] flagged ${flaggedCount} cells`);
-		changed ||= flaggedCount > 0;
-		const revealedCount = solveRevealObviousCells(minefield);
-		console.log(`[Solver] revealed ${revealedCount} cells`);
-		changed ||= revealedCount > 0;
+	for (const index of allIndices(minefield)) {
+		if (isCellRevealed(minefield, index)) {
+			solver.todoKnownCells.push(index);
+		}
+	}
+
+	while (true) {
+		let changed = false;
+
+		while (solver.todoKnownCells.length > 0) {
+			const index = solver.todoKnownCells.pop();
+			if (index == null) throw new Error('[Solver] index must not be nullable');
+			if (isCellRevealed(minefield, index)) {
+				changed = solverAddConstraintByIndex(solver, index) || changed;
+			}
+			changed = solverReduceConstrainsMineCountForIndex(solver, index) > 0 || changed;
+		}
+
+		const constraint = solver.todoConstraints.pop();
+		if (constraint != null) {
+			if (constraint.minesCount === 0) {
+				for (const index of constraint.cells) {
+					changed = solverReveal(solver, index) || changed;
+				}
+			}
+			if (constraint.minesCount === constraint.cells.size) {
+				for (const index of constraint.cells) {
+					changed = solverFlag(solver, index) || changed;
+				}
+			}
+			for (const otherConstraint of solver.constraints) {
+				if (otherConstraint === constraint) continue;
+				changed = solverCompareConstraints(solver, constraint, otherConstraint) || changed;
+				changed = solverCompareOverlapping(solver, constraint, otherConstraint) || changed;
+			}
+			continue;
+		}
+
+		changed = solverTryGlobalMineCountDeduction(solver) || changed;
+
 		if (!changed) {
-			const maybeFlaggedCount = solveMaybeFlagCells(minefield, solver);
-			console.log(`[Solver] maybe flagged ${maybeFlaggedCount} cells`);
-			changed ||= maybeFlaggedCount > 0;
-			// TODO: If neighboring number covers a portion of this numbers unflagged neighbors and rest can be either fully flagged or fully revealed, then do that.
-			// TODO: 8/5/3 that's fully block from rest of the numbers by a wall of mines. Same for two (and more) numbers together that are blocked off by mines.
-			// TODO: Cells that can be deducted from the numbers of mines left to find.
+			break;
 		}
 	}
 	minefield.flags = originalFlags;
+	const solved = isSolved(minefield);
+	if (solved) {
+		console.log('[Solver] solved');
+	} else {
+		console.log('[Solver] failed to solve');
+	}
+	return solved;
+}
+
+// TODO: Turn this into a class and add functions as methods.
+type Solver = {
+	minefield: Minefield;
+	minesCount: number;
+	constraints: Constraint[];
+	todoConstraints: Constraint[];
+	todoKnownCells: number[];
+};
+
+type Constraint = {
+	cells: Set<number>; // flattened field indices
+	minesCount: number;
+};
+
+function solverAddConstraintByIndex(solver: Solver, index: number): boolean {
+	const unknownNeighbors: Set<number> = new Set();
+	const minefield = solver.minefield;
+	const row = rowOf(index, minefield.cols);
+	const col = colOf(index, minefield.cols);
+	const value = getCellValue(minefield, row, col);
+	if (value == null) {
+		throw new Error(`Cell at index ${index} is out of bounds`);
+	}
+	let minesToFindCount = value;
+	for (const neighborIndex of neighborIndices(minefield, index)) {
+		const flag = getCellFlag(minefield, rowOf(neighborIndex, minefield.cols), colOf(neighborIndex, minefield.cols));
+		if (flag === Flags.FLAGGED) {
+			minesToFindCount -= 1;
+		} else if (flag === Flags.UNKNOWN) {
+			unknownNeighbors.add(neighborIndex);
+		}
+	}
+	if (minesToFindCount < 0) {
+		throw new Error(`Constraint is inconsistent: ${minesToFindCount} mines found, but only ${value} are allowed`);
+	}
+	if (unknownNeighbors.size > 0) {
+		solverAddConstraint(solver, { cells: unknownNeighbors, minesCount: minesToFindCount });
+		return true;
+	}
+	return false;
+}
+
+function solverAddConstraint(solver: Solver, constraint: Constraint): boolean {
+	if (constraint.cells.size === 0) {
+		if (constraint.minesCount !== 0) {
+			throw new Error(`Constraint is inconsistent: ${constraint.minesCount} mines found, but only 0 are allowed`);
+		}
+		return false;
+	}
+	if (constraint.minesCount < 0 || constraint.minesCount > constraint.cells.size) {
+		throw new Error(
+			`Constraint is inconsistent: ${constraint.minesCount} mines found, but only 0-${constraint.cells.size} are allowed`,
+		);
+	}
+	for (const existing of solver.constraints) {
+		if (constraintEquals(existing, constraint)) {
+			return false;
+		}
+	}
+	solver.constraints.push(constraint);
+	solver.todoConstraints.push(constraint);
 	return true;
 }
 
-function solveFlagObiousCells(minefield: Minefield): number {
-	let flaggedCount = 0;
-	for (let row = 0; row < minefield.rows; row++) {
-		for (let col = 0; col < minefield.cols; col++) {
-			const flag = getCellFlag(minefield, row, col);
-			const revealed = flag === Flags.REVEALED;
-			const value = getCellValue(minefield, row, col);
-			if (revealed && value != null && value > 0) {
-				const count = countCellNeighborsByFlags(minefield, row, col, Flags.FLAGGED, Flags.UNFLAGGED);
-				if (count === value) {
-					flaggedCount += flagAllUnflaggedNeighbors(minefield, row, col);
-				}
-			}
-		}
-	}
-	return flaggedCount;
+function constraintEquals(a: Constraint, b: Constraint): boolean {
+	return a.minesCount === b.minesCount && a.cells.size === b.cells.size && a.cells.isSupersetOf(b.cells);
 }
 
-function solveRevealObviousCells(minefield: Minefield): number {
-	let revealedCount = 0;
-	for (let row = 0; row < minefield.rows; row++) {
-		for (let col = 0; col < minefield.cols; col++) {
-			const flag = getCellFlag(minefield, row, col);
-			const value = getCellValue(minefield, row, col);
-			if (flag === Flags.REVEALED && value != null && value > 0) {
-				const counts = countCellAllNeighborsFlags(minefield, row, col);
-				if (counts[Flags.FLAGGED] === value && counts[Flags.UNFLAGGED] > 0) {
-					revealedCount += revealAllUnrevealedNeighbors(minefield, row, col);
-				}
-			}
+function solverReduceConstrainsMineCountForIndex(solver: Solver, index: number): number {
+	let updatedCount = 0;
+	const isMine = getCellValueByIndex(solver.minefield, index) === MINE;
+	for (const constraint of solver.constraints) {
+		if (!constraint.cells.has(index)) continue;
+		constraint.cells.delete(index);
+		if (isMine) {
+			constraint.minesCount -= 1;
 		}
+		solver.todoConstraints.push(constraint);
 	}
-	return revealedCount;
+	return updatedCount;
 }
 
-function solveMaybeFlagCells(minefield: Minefield, solver: Solver): number {
-	for (let row = 0; row < minefield.rows; row++) {
-		for (let col = 0; col < minefield.cols; col++) {
-			solver.maybeFlags[row][col].maybeFlaggedFromIndex.clear();
-		}
+function solverCompareConstraints(solver: Solver, a: Constraint, b: Constraint): boolean {
+	if (a.cells.isSubsetOf(b.cells)) {
+		const deltaCells = b.cells.difference(a.cells);
+		const deltaMinesCount = b.minesCount - a.minesCount;
+		solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
+		return true;
+	} else if (b.cells.isSubsetOf(a.cells)) {
+		const deltaCells = a.cells.difference(b.cells);
+		const deltaMinesCount = a.minesCount - b.minesCount;
+		solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
+		return true;
 	}
-	let flaggedCount = 0;
-	for (let row = 0; row < minefield.rows; row++) {
-		for (let col = 0; col < minefield.cols; col++) {
-			const flag = getCellFlag(minefield, row, col);
-			if (flag != Flags.REVEALED) continue;
-
-			const value = getCellValue(minefield, row, col);
-			if (value == null || value === 0) continue;
-
-			const counts = countCellAllNeighborsFlags(minefield, row, col);
-			if (counts[Flags.UNFLAGGED] <= 0) continue;
-
-			const index = indexOf(row, col, minefield.cols);
-			for (const [rowOffset, colOffset] of OFFSETS) {
-				const neighborRow = row + rowOffset;
-				const neighborCol = col + colOffset;
-				const neighborFlag = getCellFlag(minefield, neighborRow, neighborCol);
-				if (neighborFlag === Flags.UNFLAGGED) {
-					const neighborFlaggedFrom = solver.maybeFlags[neighborRow][neighborCol].maybeFlaggedFromIndex;
-					const size = neighborFlaggedFrom.size;
-					neighborFlaggedFrom.add(index);
-					if (neighborFlaggedFrom.size > size) {
-						flaggedCount++;
-					}
-				}
-			}
-		}
-	}
-	return flaggedCount;
+	return false;
 }
 
-// function solveFlagCellsExceptMaybeFlagged(minefield: Minefield, solver: Solver): number {
-// 	let flaggedCount = 0;
-// 	for (let row = 0; row < minefield.rows; row++) {
-// 		for (let col = 0; col < minefield.cols; col++) {
-// 			const flag = getCellFlag(minefield, row, col);
-// 			if (flag != Flags.REVEALED) continue;
+function solverCompareOverlapping(solver: Solver, a: Constraint, b: Constraint): boolean {
+	const sharedCells = a.cells.intersection(b.cells);
+	const aOnlyCells = a.cells.difference(sharedCells);
+	const bOnlyCells = b.cells.difference(sharedCells);
+	const deltaMinesCount = a.minesCount - b.minesCount;
+	let changed = false;
 
-// 			const value = getCellValue(minefield, row, col);
-// 			if (value == null || value === 0) continue;
-
-// 			const counts = countCellAllNeighborsFlags(minefield, row, col);
-// 			if (counts[Flags.UNFLAGGED] <= 0) continue;
-
-// 			// const index = indexOf(row, col, minefield.cols);
-// 			for (const [rowOffset, colOffset] of OFFSETS) {
-// 				const neighborRow = row + rowOffset;
-// 				const neighborCol = col + colOffset;
-// 				const neighborFlag = getCellFlag(minefield, neighborRow, neighborCol);
-// 				if (neighborFlag === Flags.UNFLAGGED) {
-// 					// TODO:
-// 				}
-// 			}
-// 		}
-// 	}
-// 	return flaggedCount;
-// }
-
-function flagAllUnflaggedNeighbors(field: Minefield, row: number, col: number): number {
-	let flaggedCount = 0;
-	for (const [rowOffset, colOffset] of OFFSETS) {
-		const neighborRow = row + rowOffset;
-		const neighborCol = col + colOffset;
-		const flag = getCellFlag(field, neighborRow, neighborCol);
-		if (flag === Flags.UNFLAGGED) {
-			flagCell(field, neighborRow, neighborCol);
-			flaggedCount++;
+	if (deltaMinesCount === aOnlyCells.size) {
+		for (const index of aOnlyCells) {
+			solverFlag(solver, index);
+			changed = true;
+		}
+		for (const index of bOnlyCells) {
+			solverReveal(solver, index);
+			changed = true;
 		}
 	}
-	return flaggedCount;
-}
-
-function revealAllUnrevealedNeighbors(minefield: Minefield, row: number, col: number): number {
-	let revealedCount = 0;
-	for (const [rowOffset, colOffset] of OFFSETS) {
-		const neighborRow = row + rowOffset;
-		const neighborCol = col + colOffset;
-		const flag = getCellFlag(minefield, neighborRow, neighborCol);
-		if (flag === Flags.UNFLAGGED) {
-			const exploded = revealCell(minefield, neighborRow, neighborCol);
-			if (exploded) {
-				console.error(`Exploded at (${neighborRow}:${neighborCol})`);
-			} else {
-				revealedCount++;
-			}
+	if (-deltaMinesCount === bOnlyCells.size) {
+		for (const index of aOnlyCells) {
+			solverReveal(solver, index);
+			changed = true;
+		}
+		for (const index of bOnlyCells) {
+			solverFlag(solver, index);
+			changed = true;
 		}
 	}
-	return revealedCount;
+	return changed;
 }
 
-function countCellNeighborsByFlags(minefield: Minefield, row: number, col: number, ...flags: number[]): number {
-	let count = 0;
-	for (const [rowOffset, colOffset] of OFFSETS) {
-		const neighborRow = row + rowOffset;
-		const neighborCol = col + colOffset;
-		const neighborFlag = getCellFlag(minefield, neighborRow, neighborCol);
-		if (neighborFlag != null && flags.includes(neighborFlag)) {
-			count++;
+function solverTryGlobalMineCountDeduction(solver: Solver): boolean {
+	let knownMines = 0;
+	const unknownCells: number[] = [];
+	for (const index of allIndices(solver.minefield)) {
+		if (isCellFlagged(solver.minefield, index)) {
+			knownMines++;
+		} else if (!isCellRevealed(solver.minefield, index)) {
+			unknownCells.push(index);
 		}
 	}
-	return count;
-}
-
-function countCellAllNeighborsFlags(minefield: Minefield, row: number, col: number): Record<number, number> {
-	const result: Record<number, number> = { [Flags.UNFLAGGED]: 0, [Flags.FLAGGED]: 0, [Flags.REVEALED]: 0 };
-	for (const [rowOffset, colOffset] of OFFSETS) {
-		const neighborFlag = getCellFlag(minefield, row + rowOffset, col + colOffset);
-		if (neighborFlag != null) {
-			result[neighborFlag] += 1;
+	let changed = false;
+	const remainingMines = solver.minesCount - knownMines;
+	if (remainingMines === 0) {
+		for (const index of unknownCells) {
+			changed = solverReveal(solver, index) || changed;
 		}
 	}
-	return result;
+	if (remainingMines === unknownCells.length) {
+		for (const index of unknownCells) {
+			changed = solverFlag(solver, index) || changed;
+		}
+	}
+	// TODO: Implement disjoint constraints.
+	return changed;
 }
 
-function resetSolver(minesweeper: Minesweeper): void {
+function solverFlag(solver: Solver, index: number): boolean {
+	const { minefield } = solver;
+	if (isCellFlagged(minefield, index)) return false;
+	const ok = flagCell(minefield, rowOf(index, minefield.cols), colOf(index, minefield.cols));
+	if (ok) {
+		solver.todoKnownCells.push(index);
+	}
+	return ok;
+}
+
+function solverReveal(solver: Solver, index: number): boolean {
+	const { minefield } = solver;
+	const row = rowOf(index, minefield.cols);
+	const col = colOf(index, minefield.cols);
+	if (!isInsideMinefield(minefield, row, col)) return false;
+	if (minefield.flags[row][col] === Flags.FLAGGED) return false;
+	if (minefield.flags[row][col] === Flags.REVEALED) return false;
+	const value = minefield.data[row][col];
+	minefield.flags[row][col] = Flags.REVEALED;
+	if (value === MINE) return true;
+	if (value === NONE) {
+		for (const neighborIndex of neighborIndices(minefield, index)) {
+			solverReveal(solver, neighborIndex);
+		}
+	}
+	solver.todoKnownCells.push(index);
+	return true;
+}
+
+function resetSolverFlags(minesweeper: Minesweeper): void {
 	minesweeper.solverFlags = minesweeper.originalFlags.map((r) => r.slice());
 }
