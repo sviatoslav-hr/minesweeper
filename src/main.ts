@@ -908,6 +908,7 @@ function solverCompareOverlapping(solver: Solver, a: Constraint, b: Constraint):
 function solverTryGlobalMineCountDeduction(solver: Solver): boolean {
 	let knownMines = 0;
 	const unknownCells: number[] = [];
+
 	for (const index of allIndices(solver.minefield)) {
 		if (isCellFlagged(solver.minefield, index)) {
 			knownMines++;
@@ -915,20 +916,118 @@ function solverTryGlobalMineCountDeduction(solver: Solver): boolean {
 			unknownCells.push(index);
 		}
 	}
-	let changed = false;
+
 	const remainingMines = solver.minesCount - knownMines;
+	const remainingSafe = unknownCells.length - remainingMines;
+
 	if (remainingMines === 0) {
+		for (const index of unknownCells) solverReveal(solver, index);
+		return true;
+	}
+
+	if (remainingSafe === 0) {
+		for (const index of unknownCells) solverFlag(solver, index);
+		return true;
+	}
+
+	// TODO: Understand these.
+	const mineConstraints = solverFindDisjointConstraintGroups(solver.constraints, remainingMines, (c) => c.minesCount);
+	if (mineConstraints) {
+		let changed = false;
+		const coveredCells = getAllConstraintCells(mineConstraints);
 		for (const index of unknownCells) {
-			changed = solverReveal(solver, index) || changed;
+			if (!coveredCells.has(index)) {
+				solverReveal(solver, index);
+				changed = true;
+			}
+		}
+
+		return changed;
+	}
+
+	const safeConstraints = solverFindDisjointConstraintGroups(
+		solver.constraints,
+		remainingSafe,
+		(c) => c.cells.size - c.minesCount,
+	);
+	if (safeConstraints) {
+		let changed = false;
+		const coveredCells = getAllConstraintCells(safeConstraints);
+		for (const index of unknownCells) {
+			if (!coveredCells.has(index)) {
+				solverFlag(solver, index);
+				changed = true;
+			}
+		}
+
+		return changed;
+	}
+
+	return false;
+}
+
+function solverFindDisjointConstraintGroups(
+	constraints: Constraint[],
+	target: number,
+	getValue: (constraint: Constraint) => number,
+): Constraint[] | null {
+	const group: Constraint[] = [];
+	const usedCells = new Set<number>();
+
+	function search(start: number, value: number): Constraint[] | null {
+		if (value === target) {
+			return group.slice();
+		}
+
+		if (value > target) {
+			return null;
+		}
+
+		for (let i = start; i < constraints.length; i++) {
+			const constraint = constraints[i];
+
+			let overlaps = false;
+
+			for (const cell of constraint.cells) {
+				if (usedCells.has(cell)) {
+					overlaps = true;
+					break;
+				}
+			}
+
+			if (overlaps) continue;
+
+			const nextValue = value + getValue(constraint);
+
+			// Important pruning
+			if (nextValue > target) continue;
+
+			group.push(constraint);
+			for (const cell of constraint.cells) usedCells.add(cell);
+
+			const result = search(i + 1, nextValue);
+			if (result) return result;
+
+			group.pop();
+			for (const cell of constraint.cells) usedCells.delete(cell);
+		}
+
+		return null;
+	}
+
+	return search(0, 0);
+}
+
+function getAllConstraintCells(constraints: Constraint[]): Set<number> {
+	const cells = new Set<number>();
+
+	for (const constraint of constraints) {
+		for (const cell of constraint.cells) {
+			cells.add(cell);
 		}
 	}
-	if (remainingMines === unknownCells.length) {
-		for (const index of unknownCells) {
-			changed = solverFlag(solver, index) || changed;
-		}
-	}
-	// TODO: Implement disjoint constraints.
-	return changed;
+
+	return cells;
 }
 
 function solverFlag(solver: Solver, index: number): boolean {
