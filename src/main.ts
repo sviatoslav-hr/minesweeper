@@ -152,10 +152,10 @@ async function main(): Promise<void> {
 		minesweeper.field.flags = showSolverFlags ? minesweeper.solverFlags : minesweeper.playerFlags;
 
 		if (input.isPressed('KeyE')) {
-			trySolve(minesweeper);
+			Solver.trySolve(minesweeper);
 		}
 		if (input.isPressed('KeyQ')) {
-			resetSolverFlags(minesweeper);
+			Solver.resetFlags(minesweeper);
 		}
 
 		r.setFont(config.font);
@@ -703,374 +703,381 @@ function* allIndices(minefield: Minefield): Generator<number> {
 	}
 }
 
-function trySolve(minesweeper: Minesweeper): boolean {
-	console.log('[Solver] solving...');
-	const { field: minefield, solverFlags } = minesweeper;
-	const originalFlags = minesweeper.field.flags;
-	minefield.flags = solverFlags;
-
-	const solver: Solver = {
-		minefield,
-		minesCount: minesweeper.minesCount,
-		constraints: [],
-		todoConstraints: [],
-		todoKnownCells: [],
-	};
-	for (const index of allIndices(minefield)) {
-		if (isCellRevealed(minefield, index)) {
-			solver.todoKnownCells.push(index);
-		}
-	}
-
-	while (true) {
-		let changed = false;
-
-		while (solver.todoKnownCells.length > 0) {
-			const index = solver.todoKnownCells.pop();
-			if (index == null) throw new Error('[Solver] index must not be nullable');
-			if (isCellRevealed(minefield, index)) {
-				changed = solverAddConstraintByIndex(solver, index) || changed;
-			}
-			changed = solverReduceConstrainsMineCountForIndex(solver, index) > 0 || changed;
-		}
-
-		const constraint = solver.todoConstraints.pop();
-		if (constraint != null) {
-			if (constraint.minesCount === 0) {
-				for (const index of constraint.cells) {
-					changed = solverReveal(solver, index) || changed;
-				}
-			}
-			if (constraint.minesCount === constraint.cells.size) {
-				for (const index of constraint.cells) {
-					changed = solverFlag(solver, index) || changed;
-				}
-			}
-			for (const otherConstraint of solver.constraints) {
-				if (otherConstraint === constraint) continue;
-				changed = solverCompareConstraints(solver, constraint, otherConstraint) || changed;
-				changed = solverCompareOverlapping(solver, constraint, otherConstraint) || changed;
-			}
-			continue;
-		}
-
-		if (!changed) {
-			console.time('[Solver] tryGlobalMineCountDeduction');
-			changed = solverTryGlobalMineCountDeduction(solver) || changed;
-			console.timeEnd('[Solver] tryGlobalMineCountDeduction');
-		}
-
-		if (!changed) {
-			break;
-		}
-	}
-	const solved = isSolved(minefield);
-	minesweeper.solved = solved;
-	minefield.flags = originalFlags;
-	if (solved) {
-		console.log('[Solver] solved');
-	} else {
-		console.log('[Solver] failed to solve');
-	}
-	return solved;
-}
-
-// TODO: Turn this into a class and add functions as methods.
-type Solver = {
-	minefield: Minefield;
-	minesCount: number;
-	constraints: Constraint[];
-	todoConstraints: Constraint[];
-	todoKnownCells: number[];
-};
-
 type Constraint = {
 	cells: Set<number>; // flattened field indices
 	minesCount: number;
 };
 
-function solverAddConstraintByIndex(solver: Solver, index: number): boolean {
-	const unknownNeighbors: Set<number> = new Set();
-	const minefield = solver.minefield;
-	const row = rowOf(index, minefield.cols);
-	const col = colOf(index, minefield.cols);
-	const value = getCellValue(minefield, row, col);
-	if (value == null) {
-		throw new Error(`Cell at index ${index} is out of bounds`);
-	}
-	let minesToFindCount = value;
-	for (const neighborIndex of neighborIndices(minefield, index)) {
-		const flag = getCellFlag(minefield, rowOf(neighborIndex, minefield.cols), colOf(neighborIndex, minefield.cols));
-		if (flag === Flags.FLAGGED) {
-			minesToFindCount -= 1;
-		} else if (flag === Flags.UNKNOWN) {
-			unknownNeighbors.add(neighborIndex);
-		}
-	}
-	if (minesToFindCount < 0) {
-		throw new Error(`Constraint is inconsistent: ${minesToFindCount} mines found, but only ${value} are allowed`);
-	}
-	if (unknownNeighbors.size > 0) {
-		solverAddConstraint(solver, { cells: unknownNeighbors, minesCount: minesToFindCount });
-		return true;
-	}
-	return false;
-}
-
-function solverAddConstraint(solver: Solver, constraint: Constraint): boolean {
-	if (constraint.cells.size === 0) {
-		if (constraint.minesCount !== 0) {
-			throw new Error(`Constraint is inconsistent: ${constraint.minesCount} mines found, but only 0 are allowed`);
-		}
-		return false;
-	}
-	if (constraint.minesCount < 0 || constraint.minesCount > constraint.cells.size) {
-		throw new Error(
-			`Constraint is inconsistent: ${constraint.minesCount} mines found, but only 0-${constraint.cells.size} are allowed`,
-		);
-	}
-	for (const existing of solver.constraints) {
-		if (constraintEquals(existing, constraint)) {
-			return false;
-		}
-	}
-	solver.constraints.push(constraint);
-	solver.todoConstraints.push(constraint);
-	return true;
-}
-
 function constraintEquals(a: Constraint, b: Constraint): boolean {
 	return a.minesCount === b.minesCount && a.cells.size === b.cells.size && a.cells.isSupersetOf(b.cells);
 }
 
-function solverReduceConstrainsMineCountForIndex(solver: Solver, index: number): number {
-	let updatedCount = 0;
-	const flag = getCellFlagByIndex(solver.minefield, index);
-	if (flag === Flags.UNKNOWN) return updatedCount;
-	const isMine = flag === Flags.FLAGGED;
-	for (const constraint of solver.constraints) {
-		if (!constraint.cells.has(index)) continue;
-		constraint.cells.delete(index);
-		if (isMine) {
-			constraint.minesCount -= 1;
-		}
-		solver.todoConstraints.push(constraint);
-		updatedCount++;
-	}
-	return updatedCount;
-}
+class Solver {
+	minefield: Minefield;
+	minesCount: number;
+	constraints: Constraint[] = [];
+	todoConstraints: Constraint[] = [];
+	todoKnownCells: number[] = [];
+	changed = false;
 
-function solverCompareConstraints(solver: Solver, a: Constraint, b: Constraint): boolean {
-	if (a.cells.isSubsetOf(b.cells)) {
-		const deltaCells = b.cells.difference(a.cells);
-		const deltaMinesCount = b.minesCount - a.minesCount;
-		return solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
-	} else if (b.cells.isSubsetOf(a.cells)) {
-		const deltaCells = a.cells.difference(b.cells);
+	constructor(minefield: Minefield, minesCount: number) {
+		this.minefield = minefield;
+		this.minesCount = minesCount;
+		for (const index of allIndices(minefield)) {
+			if (isCellRevealed(minefield, index)) {
+				this.todoKnownCells.push(index);
+			}
+		}
+	}
+
+	static trySolve(minesweeper: Minesweeper): boolean {
+		console.log('[Solver] solving...');
+		const { field: minefield, solverFlags } = minesweeper;
+		const prevFlags = minesweeper.field.flags;
+		minefield.flags = solverFlags;
+		const solver = new Solver(minefield, minesweeper.minesCount);
+		minesweeper.solved = solver.trySolve();
+		minefield.flags = prevFlags;
+		if (minesweeper.solved) {
+			console.log('[Solver] solved');
+		} else {
+			console.log('[Solver] failed to solve');
+		}
+		return minesweeper.solved;
+	}
+
+	static resetFlags(minesweeper: Minesweeper): void {
+		minesweeper.solverFlags = minesweeper.originalFlags.map((r) => r.slice());
+	}
+
+	trySolve(): boolean {
+		while (true) {
+			let changed = false;
+
+			while (this.todoKnownCells.length > 0) {
+				const index = this.todoKnownCells.pop();
+				if (index == null) throw new Error('[Solver] index must not be nullable');
+				if (isCellRevealed(this.minefield, index)) {
+					changed = this.addConstraintByIndex(index) || changed;
+				}
+				changed = this.reduceConstrainsMineCountForIndex(index) > 0 || changed;
+			}
+
+			const constraint = this.todoConstraints.pop();
+			if (constraint != null) {
+				if (constraint.minesCount === 0) {
+					for (const index of constraint.cells) {
+						changed = this.revealCell(index) || changed;
+					}
+				}
+				if (constraint.minesCount === constraint.cells.size) {
+					for (const index of constraint.cells) {
+						changed = this.flagCell(index) || changed;
+					}
+				}
+				for (const otherConstraint of this.constraints) {
+					if (otherConstraint === constraint) continue;
+					changed = this.checkConstraintsDeltas(constraint, otherConstraint) || changed;
+					changed = this.checkOverlappingConstraints(constraint, otherConstraint) || changed;
+				}
+				continue;
+			}
+
+			if (!changed) {
+				console.time('[Solver] tryGlobalMineCountDeduction');
+				changed = this.tryGlobalMineCountDeduction() || changed;
+				console.timeEnd('[Solver] tryGlobalMineCountDeduction');
+			}
+
+			if (!changed) {
+				break;
+			}
+		}
+		const solved = isSolved(this.minefield);
+		return solved;
+	}
+
+	private addConstraintByIndex(index: number): boolean {
+		const unknownNeighbors: Set<number> = new Set();
+		const minefield = this.minefield;
+		const row = rowOf(index, minefield.cols);
+		const col = colOf(index, minefield.cols);
+		const value = getCellValue(minefield, row, col);
+		if (value == null) {
+			throw new Error(`Cell at index ${index} is out of bounds`);
+		}
+		let minesToFindCount = value;
+		for (const neighborIndex of neighborIndices(minefield, index)) {
+			const flag = getCellFlag(
+				minefield,
+				rowOf(neighborIndex, minefield.cols),
+				colOf(neighborIndex, minefield.cols),
+			);
+			if (flag === Flags.FLAGGED) {
+				minesToFindCount -= 1;
+			} else if (flag === Flags.UNKNOWN) {
+				unknownNeighbors.add(neighborIndex);
+			}
+		}
+		if (minesToFindCount < 0) {
+			throw new Error(
+				`Constraint is inconsistent: ${minesToFindCount} mines found, but only ${value} are allowed`,
+			);
+		}
+		if (unknownNeighbors.size > 0) {
+			this.addConstraint({ cells: unknownNeighbors, minesCount: minesToFindCount });
+			return true;
+		}
+		return false;
+	}
+
+	private addConstraint(constraint: Constraint): boolean {
+		if (constraint.cells.size === 0) {
+			if (constraint.minesCount !== 0) {
+				throw new Error(
+					`Constraint is inconsistent: ${constraint.minesCount} mines found, but only 0 are allowed`,
+				);
+			}
+			return false;
+		}
+		if (constraint.minesCount < 0 || constraint.minesCount > constraint.cells.size) {
+			throw new Error(
+				`Constraint is inconsistent: ${constraint.minesCount} mines found, but only 0-${constraint.cells.size} are allowed`,
+			);
+		}
+		for (const existing of this.constraints) {
+			if (constraintEquals(existing, constraint)) {
+				return false;
+			}
+		}
+		this.constraints.push(constraint);
+		this.todoConstraints.push(constraint);
+		return true;
+	}
+
+	private reduceConstrainsMineCountForIndex(index: number): number {
+		let updatedCount = 0;
+		const flag = getCellFlagByIndex(this.minefield, index);
+		if (flag === Flags.UNKNOWN) return updatedCount;
+		const isMine = flag === Flags.FLAGGED;
+		for (const constraint of this.constraints) {
+			if (!constraint.cells.has(index)) continue;
+			constraint.cells.delete(index);
+			if (isMine) {
+				constraint.minesCount -= 1;
+			}
+			this.todoConstraints.push(constraint);
+			updatedCount++;
+		}
+		return updatedCount;
+	}
+
+	private checkConstraintsDeltas(a: Constraint, b: Constraint): boolean {
+		if (a.cells.isSubsetOf(b.cells)) {
+			const deltaCells = b.cells.difference(a.cells);
+			const deltaMinesCount = b.minesCount - a.minesCount;
+			return this.addConstraint({ cells: deltaCells, minesCount: deltaMinesCount });
+		} else if (b.cells.isSubsetOf(a.cells)) {
+			const deltaCells = a.cells.difference(b.cells);
+			const deltaMinesCount = a.minesCount - b.minesCount;
+			return this.addConstraint({ cells: deltaCells, minesCount: deltaMinesCount });
+		}
+		return false;
+	}
+
+	private checkOverlappingConstraints(a: Constraint, b: Constraint): boolean {
+		const sharedCells = a.cells.intersection(b.cells);
+		const aOnlyCells = a.cells.difference(sharedCells);
+		const bOnlyCells = b.cells.difference(sharedCells);
 		const deltaMinesCount = a.minesCount - b.minesCount;
-		return solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
-	}
-	return false;
-}
-
-function solverCompareOverlapping(solver: Solver, a: Constraint, b: Constraint): boolean {
-	const sharedCells = a.cells.intersection(b.cells);
-	const aOnlyCells = a.cells.difference(sharedCells);
-	const bOnlyCells = b.cells.difference(sharedCells);
-	const deltaMinesCount = a.minesCount - b.minesCount;
-	let changed = false;
-
-	if (deltaMinesCount === aOnlyCells.size) {
-		for (const index of aOnlyCells) {
-			changed = solverFlag(solver, index) || changed;
-		}
-		for (const index of bOnlyCells) {
-			changed = solverReveal(solver, index) || changed;
-		}
-	}
-	if (-deltaMinesCount === bOnlyCells.size) {
-		for (const index of aOnlyCells) {
-			changed = solverReveal(solver, index) || changed;
-		}
-		for (const index of bOnlyCells) {
-			changed = solverFlag(solver, index) || changed;
-		}
-	}
-	return changed;
-}
-
-function solverTryGlobalMineCountDeduction(solver: Solver): boolean {
-	let knownMines = 0;
-	const unknownCells: number[] = [];
-
-	for (const index of allIndices(solver.minefield)) {
-		if (isCellFlagged(solver.minefield, index)) {
-			knownMines++;
-		} else if (!isCellRevealed(solver.minefield, index)) {
-			unknownCells.push(index);
-		}
-	}
-
-	if (unknownCells.length === 0) return false;
-
-	const remainingMinesCount = solver.minesCount - knownMines;
-	const remainingSafeCount = unknownCells.length - remainingMinesCount;
-
-	if (remainingMinesCount === 0) {
-		for (const index of unknownCells) solverReveal(solver, index);
-		return true;
-	}
-
-	if (remainingSafeCount === 0) {
-		for (const index of unknownCells) solverFlag(solver, index);
-		return true;
-	}
-
-	// TODO: Understand these.
-	const mineConstraints = solverFindDisjointConstraintGroups(
-		solver.constraints,
-		remainingMinesCount,
-		(c) => c.minesCount,
-	);
-	if (mineConstraints) {
 		let changed = false;
-		const coveredCells = getAllConstraintCells(mineConstraints);
-		for (const index of unknownCells) {
-			if (!coveredCells.has(index)) {
-				solverReveal(solver, index);
-				changed = true;
+
+		if (deltaMinesCount === aOnlyCells.size) {
+			for (const index of aOnlyCells) {
+				changed = this.flagCell(index) || changed;
+			}
+			for (const index of bOnlyCells) {
+				changed = this.revealCell(index) || changed;
 			}
 		}
-
+		if (-deltaMinesCount === bOnlyCells.size) {
+			for (const index of aOnlyCells) {
+				changed = this.revealCell(index) || changed;
+			}
+			for (const index of bOnlyCells) {
+				changed = this.flagCell(index) || changed;
+			}
+		}
 		return changed;
 	}
 
-	const safeConstraints = solverFindDisjointConstraintGroups(
-		solver.constraints,
-		remainingSafeCount,
-		(c) => c.cells.size - c.minesCount,
-	);
-	if (safeConstraints) {
-		let changed = false;
-		const coveredCells = getAllConstraintCells(safeConstraints);
-		for (const index of unknownCells) {
-			if (!coveredCells.has(index)) {
-				solverFlag(solver, index);
-				changed = true;
+	private tryGlobalMineCountDeduction(): boolean {
+		let knownMines = 0;
+		const unknownCells: number[] = [];
+
+		for (const index of allIndices(this.minefield)) {
+			if (isCellFlagged(this.minefield, index)) {
+				knownMines++;
+			} else if (!isCellRevealed(this.minefield, index)) {
+				unknownCells.push(index);
 			}
 		}
 
-		return changed;
-	}
+		if (unknownCells.length === 0) return false;
 
-	return false;
-}
+		const remainingMinesCount = this.minesCount - knownMines;
+		const remainingSafeCount = unknownCells.length - remainingMinesCount;
 
-function solverFindDisjointConstraintGroups(
-	constraints: Constraint[],
-	target: number,
-	getValue: (constraint: Constraint) => number,
-): Constraint[] | null {
-	const MAX_CONSTRAINTS = 500;
-	const MAX_SEARCH_STATES = 100_000;
-	if (constraints.length > MAX_CONSTRAINTS) return null;
-	const group: Constraint[] = [];
-	const usedCells = new Set<number>();
-	let searchedStates = 0;
-	let searchLimitReached = false;
-
-	function search(startIndex: number, value: number): Constraint[] | null {
-		searchedStates++;
-		if (searchedStates > MAX_SEARCH_STATES) {
-			searchLimitReached = true;
-			return null;
-		}
-		if (value === target) {
-			return group.slice();
+		if (remainingMinesCount === 0) {
+			for (const index of unknownCells) this.revealCell(index);
+			return true;
 		}
 
-		if (value > target) {
-			return null;
+		if (remainingSafeCount === 0) {
+			for (const index of unknownCells) this.flagCell(index);
+			return true;
 		}
 
-		for (let constraintIndex = startIndex; constraintIndex < constraints.length; constraintIndex++) {
-			const constraint = constraints[constraintIndex];
-			const constraintValue = getValue(constraint);
-			if (constraintValue === 0) continue;
-
-			let overlaps = false;
-
-			for (const cell of constraint.cells) {
-				if (usedCells.has(cell)) {
-					overlaps = true;
-					break;
+		// TODO: Understand these.
+		const mineConstraints = this.findDisjointConstraintGroups(
+			this.constraints,
+			remainingMinesCount,
+			(c) => c.minesCount,
+		);
+		if (mineConstraints) {
+			let changed = false;
+			const coveredCells = this.getAllConstraintCells(mineConstraints);
+			for (const index of unknownCells) {
+				if (!coveredCells.has(index)) {
+					this.revealCell(index);
+					changed = true;
 				}
 			}
 
-			if (overlaps) continue;
-
-			const nextValue = value + constraintValue;
-
-			// Important pruning
-			if (nextValue > target) continue;
-
-			group.push(constraint);
-			for (const cell of constraint.cells) usedCells.add(cell);
-
-			const result = search(constraintIndex + 1, nextValue);
-			if (result || searchLimitReached) return result;
-
-			group.pop();
-			for (const cell of constraint.cells) usedCells.delete(cell);
+			return changed;
 		}
 
-		return null;
-	}
+		const safeConstraints = this.findDisjointConstraintGroups(
+			this.constraints,
+			remainingSafeCount,
+			(c) => c.cells.size - c.minesCount,
+		);
+		if (safeConstraints) {
+			let changed = false;
+			const coveredCells = this.getAllConstraintCells(safeConstraints);
+			for (const index of unknownCells) {
+				if (!coveredCells.has(index)) {
+					this.flagCell(index);
+					changed = true;
+				}
+			}
 
-	return search(0, 0);
-}
-
-function getAllConstraintCells(constraints: Constraint[]): Set<number> {
-	const cells = new Set<number>();
-
-	for (const constraint of constraints) {
-		for (const cell of constraint.cells) {
-			cells.add(cell);
+			return changed;
 		}
+
+		return false;
 	}
 
-	return cells;
-}
+	private findDisjointConstraintGroups(
+		constraints: Constraint[],
+		target: number,
+		getValue: (constraint: Constraint) => number,
+	): Constraint[] | null {
+		const MAX_CONSTRAINTS = 500;
+		const MAX_SEARCH_STATES = 100_000;
+		if (constraints.length > MAX_CONSTRAINTS) return null;
+		const group: Constraint[] = [];
+		const usedCells = new Set<number>();
+		let searchedStates = 0;
+		let searchLimitReached = false;
 
-function solverFlag(solver: Solver, index: number): boolean {
-	const { minefield } = solver;
-	if (isCellFlagged(minefield, index)) return false;
-	const ok = flagCell(minefield, rowOf(index, minefield.cols), colOf(index, minefield.cols));
-	if (ok) {
-		solver.todoKnownCells.push(index);
-	}
-	return ok;
-}
+		function search(startIndex: number, value: number): Constraint[] | null {
+			searchedStates++;
+			if (searchedStates > MAX_SEARCH_STATES) {
+				searchLimitReached = true;
+				return null;
+			}
+			if (value === target) {
+				return group.slice();
+			}
 
-function solverReveal(solver: Solver, index: number): boolean {
-	const { minefield } = solver;
-	const row = rowOf(index, minefield.cols);
-	const col = colOf(index, minefield.cols);
-	if (!isInsideMinefield(minefield, row, col)) return false;
-	if (minefield.flags[row][col] === Flags.FLAGGED) return false;
-	if (minefield.flags[row][col] === Flags.REVEALED) return false;
-	const value = minefield.data[row][col];
-	minefield.flags[row][col] = Flags.REVEALED;
-	if (value === MINE) return true;
-	if (value === NONE) {
-		for (const neighborIndex of neighborIndices(minefield, index)) {
-			solverReveal(solver, neighborIndex);
+			if (value > target) {
+				return null;
+			}
+
+			for (let constraintIndex = startIndex; constraintIndex < constraints.length; constraintIndex++) {
+				const constraint = constraints[constraintIndex];
+				const constraintValue = getValue(constraint);
+				if (constraintValue === 0) continue;
+
+				let overlaps = false;
+
+				for (const cell of constraint.cells) {
+					if (usedCells.has(cell)) {
+						overlaps = true;
+						break;
+					}
+				}
+
+				if (overlaps) continue;
+
+				const nextValue = value + constraintValue;
+
+				// Important pruning
+				if (nextValue > target) continue;
+
+				group.push(constraint);
+				for (const cell of constraint.cells) usedCells.add(cell);
+
+				const result = search(constraintIndex + 1, nextValue);
+				if (result || searchLimitReached) return result;
+
+				group.pop();
+				for (const cell of constraint.cells) usedCells.delete(cell);
+			}
+
+			return null;
 		}
-	}
-	solver.todoKnownCells.push(index);
-	return true;
-}
 
-function resetSolverFlags(minesweeper: Minesweeper): void {
-	minesweeper.solverFlags = minesweeper.originalFlags.map((r) => r.slice());
+		return search(0, 0);
+	}
+
+	private getAllConstraintCells(constraints: Constraint[]): Set<number> {
+		const cells = new Set<number>();
+		for (const constraint of constraints) {
+			for (const cell of constraint.cells) {
+				cells.add(cell);
+			}
+		}
+		return cells;
+	}
+
+	private flagCell(index: number): boolean {
+		const { minefield } = this;
+		if (isCellFlagged(minefield, index)) return false;
+		const ok = flagCell(minefield, rowOf(index, minefield.cols), colOf(index, minefield.cols));
+		if (ok) {
+			this.todoKnownCells.push(index);
+		}
+		return ok;
+	}
+
+	private revealCell(index: number): boolean {
+		const { minefield } = this;
+		const row = rowOf(index, minefield.cols);
+		const col = colOf(index, minefield.cols);
+		if (!isInsideMinefield(minefield, row, col)) return false;
+		if (minefield.flags[row][col] === Flags.FLAGGED) return false;
+		if (minefield.flags[row][col] === Flags.REVEALED) return false;
+		const value = minefield.data[row][col];
+		minefield.flags[row][col] = Flags.REVEALED;
+		if (value === MINE) return true;
+		if (value === NONE) {
+			for (const neighborIndex of neighborIndices(minefield, index)) {
+				this.revealCell(neighborIndex);
+			}
+		}
+		this.todoKnownCells.push(index);
+		return true;
+	}
 }
