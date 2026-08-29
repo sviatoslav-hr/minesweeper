@@ -30,6 +30,11 @@ export class Random {
 		this.source = source;
 	}
 
+	static fromSeed(seed: string): Random {
+		const source = new AleaRngSource(seed);
+		return new Random(source);
+	}
+
 	get seed(): string {
 		return this.source.getSeed();
 	}
@@ -39,10 +44,7 @@ export class Random {
 	}
 
 	double(): number {
-		return (
-			this.float() +
-			((this.float() * 0x200000) | 0) * 1.1102230246251565e-16
-		); // 2^-53
+		return this.float() + ((this.float() * 0x200000) | 0) * 1.1102230246251565e-16; // 2^-53
 	}
 
 	int32Range(min: number, max: number): number {
@@ -69,8 +71,7 @@ export class Random {
 	selectMany<T>(values: T[], minCount = 1, maxCount = values.length): T[] {
 		if (values.length === 0) return [];
 		const n = values.length;
-		if (minCount > n)
-			throw new Error('min cannot be greater than array length');
+		if (minCount > n) throw new Error('min cannot be greater than array length');
 		// TODO/PERF: Figure out how to avoid this copy, so we created only 1 array.
 		values = values.slice();
 
@@ -148,9 +149,7 @@ export class AleaRngSource implements RngSource {
 
 	reset(seed?: string): void {
 		if (seed && seed !== this.seed) {
-			console.log(
-				`[RNG] Resetting with new seed=${seed}. Previous seed=${this.seed}`,
-			);
+			console.log(`[RNG] Resetting with new seed=${seed}. Previous seed=${this.seed}`);
 			this.init(seed);
 		} else {
 			console.log(`[RNG] Resetting with same seed=${this.seed}`);

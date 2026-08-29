@@ -1,8 +1,20 @@
 import { isInsideRect, v2Clone, type Rect, type Vec2 } from '$math';
 import { KeyboardInput } from './input';
-import { random, type Random } from './random';
+import { Random } from './random';
 import { Renderer2d, type FontRendered } from './renderer';
 import './style.css';
+
+/*
+TODO:
+- Retry minefield generation if solver failed.
+- Add a cool win animation.
+- Add a cool lose animation (some kind of explosion?).
+- Add a clock.
+- Add a scoreboard.
+- Add sounds (with mute option).
+- Allow optionally specifying the seed for minefield generation in the URL.
+- Add a second "theme" where number color is displayed as text instead of a background.
+*/
 
 const Color = {
 	BACKGROUND: '--color-bg',
@@ -101,7 +113,6 @@ async function main(): Promise<void> {
 
 	const rows = DEFAULT_ROWS;
 	const cols = DEFAULT_COLS;
-	random.reset(String(Date.now()));
 
 	let showSolverFlags = false;
 
@@ -315,7 +326,6 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 		minesweeper.generated = true;
 		const index = indexOf(cell.row, cell.col, minesweeper.field.cols);
 		minesweeper.field = generateMinefield(
-			random,
 			minesweeper.field.rows,
 			minesweeper.field.cols,
 			minesweeper.minesCount,
@@ -424,41 +434,56 @@ const Flags = {
 } as const;
 
 function generateMinefield(
-	random: Random,
 	rows: number,
 	cols: number,
 	minesCount: number,
 	targetIndex: number,
+	rngSeed?: string,
 ): Minefield {
 	const data = Array.from({ length: rows }, () => Array(cols).fill(0));
-	const cellsCount = rows * cols;
-	const maxAttempts = 10;
-	let skipIndexes: number[] = [targetIndex];
+	rngSeed ??= Date.now().toString();
+	placeMines(data, cols, targetIndex, minesCount, rngSeed);
+	placeNumbers(data, cols);
+
+	const flags = Array.from({ length: rows }, () => Array(cols).fill(Flags.UNKNOWN));
+	return { rows, cols, data, flags };
+}
+
+function placeMines(data: number[][], cols: number, targetIndex: number, minesCount: number, rngSeed: string): void {
+	const rows = data.length;
+	const targetRow = rowOf(targetIndex, cols);
+	const targetCol = colOf(targetIndex, cols);
+	console.log(`Placing mines with seed: ${rngSeed} for [${rows}x${cols}] and target: [${targetRow};${targetCol}]`);
+	const random = Random.fromSeed(rngSeed);
+	const cellsCount = data.length * data[0].length;
+	const indices: number[] = [];
 	{
-		const targetRow = rowOf(targetIndex, cols);
-		const targetCol = colOf(targetIndex, cols);
-		for (const [rowOffset, colOffset] of OFFSETS) {
-			const index = indexOf(targetRow + rowOffset, targetCol + colOffset, cols);
-			skipIndexes.push(index);
-		}
-	}
-	for (let i = 0; i < minesCount; i++) {
-		let attempts = 0;
-		while (attempts < maxAttempts) {
-			const tileIndex = random.int32Range(0, cellsCount);
-			const tileRow = rowOf(tileIndex, cols);
-			const tileCol = colOf(tileIndex, cols);
-			if (data[tileRow][tileCol] === 0 && !skipIndexes.includes(tileIndex)) {
-				data[tileRow][tileCol] = MINE;
-				break;
+		for (let index = 0; index < cellsCount; index++) {
+			const row = rowOf(index, cols);
+			const col = colOf(index, cols);
+			// NOTE: Skipping tiles near target because that's where the player has clicked.
+			const isSafe = Math.abs(row - targetRow) <= 1 && Math.abs(col - targetCol) <= 1;
+			if (!isSafe) {
+				indices.push(index);
 			}
-			attempts++;
-		}
-		if (attempts === maxAttempts) {
-			console.error(`Failed to place mine at ${i + 1} of ${minesCount}, skipping.`);
 		}
 	}
 
+	// Partial Fisher-Yates shuffle
+	for (let i = 0; i < minesCount; i++) {
+		const j = i + random.int32Range(0, indices.length - i);
+		{
+			const temp = indices[i];
+			indices[i] = indices[j];
+			indices[j] = temp;
+		}
+		const index = indices[i];
+		data[rowOf(index, cols)][colOf(index, cols)] = MINE;
+	}
+}
+
+function placeNumbers(data: number[][], cols: number): void {
+	const rows = data.length;
 	for (let row = 0; row < rows; row++) {
 		for (let col = 0; col < cols; col++) {
 			if (data[row][col] === MINE) continue;
@@ -479,9 +504,6 @@ function generateMinefield(
 			data[row][col] = neighborMines;
 		}
 	}
-
-	const flags = Array.from({ length: rows }, () => Array(cols).fill(Flags.UNKNOWN));
-	return { rows, cols, data, flags };
 }
 
 function emptyMinefield(rows: number, cols: number): Minefield {
@@ -736,7 +758,11 @@ function trySolve(minesweeper: Minesweeper): boolean {
 			continue;
 		}
 
-		changed = solverTryGlobalMineCountDeduction(solver) || changed;
+		if (!changed) {
+			console.time('[Solver] tryGlobalMineCountDeduction');
+			changed = solverTryGlobalMineCountDeduction(solver) || changed;
+			console.timeEnd('[Solver] tryGlobalMineCountDeduction');
+		}
 
 		if (!changed) {
 			break;
