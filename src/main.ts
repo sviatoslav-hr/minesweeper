@@ -6,7 +6,7 @@ import './style.css';
 
 /*
 TODO:
-- Retry minefield generation if solver failed.
+- Improve minefield generation UX - board freezes (add animation?).
 - Add a cool win animation.
 - Add a cool lose animation (some kind of explosion?).
 - Add a clock.
@@ -46,7 +46,7 @@ type Minesweeper = {
 	originalFlags: number[][];
 	playerFlags: number[][];
 	solverFlags: number[][];
-	minesCount: number;
+	expectedMinesCount: number;
 	generated: boolean;
 	solved: boolean;
 	done: boolean;
@@ -56,6 +56,7 @@ type Minefield = {
 	rows: number;
 	cols: number;
 	data: number[][]; // -1 = mine, 0 = empty, 1-8 = number of mines around
+	minesCount: number;
 	flags: number[][]; // 0 = unknown, 1 = flagged, 2 = revealed
 };
 
@@ -125,7 +126,7 @@ async function main(): Promise<void> {
 				playerFlags: field.flags,
 				originalFlags: field.flags.map((r) => r.slice()),
 				solverFlags: field.flags.map((r) => r.slice()),
-				minesCount: DEFAULT_MINES_COUNT,
+				expectedMinesCount: DEFAULT_MINES_COUNT,
 				generated: false,
 				done: false,
 				solved: false,
@@ -267,8 +268,8 @@ function computeCell(config: GameConfig, minefield: Minefield, row: number, col:
 		x: x + config.cellSize / 2,
 		y: y + config.cellSize / 2,
 	};
-	const flagged = minefield.flags[row][col] === Flags.FLAGGED;
-	const revealed = minefield.flags[row][col] === Flags.REVEALED;
+	const flagged = minefield.flags[row][col] === Flag.FLAGGED;
+	const revealed = minefield.flags[row][col] === Flag.REVEALED;
 	const value = minefield.data[row][col];
 	const cell: CellInfo = {
 		x,
@@ -322,22 +323,9 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 	}
 
 	if (!minesweeper.generated && cell.hovered && !cell.revealed && input.isPressed('MouseLeft')) {
-		console.log('Generating minefield...');
 		minesweeper.generated = true;
-		const index = indexOf(cell.row, cell.col, minesweeper.field.cols);
-		minesweeper.field = generateMinefield(
-			minesweeper.field.rows,
-			minesweeper.field.cols,
-			minesweeper.minesCount,
-			index,
-		);
-		// TODO: Move this into a function.
-		minesweeper.playerFlags = minesweeper.field.flags;
-		revealCell(minesweeper.field, cell.row, cell.col);
+		generateMinefield(minesweeper, indexOf(cell.row, cell.col, minesweeper.field.cols));
 		cell.revealed = true;
-		minesweeper.solverFlags = minesweeper.field.flags.map((r) => r.slice());
-		minesweeper.originalFlags = minesweeper.field.flags.map((r) => r.slice());
-		minesweeper.solved = false;
 	}
 }
 
@@ -427,35 +415,61 @@ const OFFSETS = [
 ];
 const MINE = -1;
 const NONE = 0;
-const Flags = {
+
+const Flag = {
 	UNKNOWN: 0,
 	FLAGGED: 1,
 	REVEALED: 2,
 } as const;
+type Flag = (typeof Flag)[keyof typeof Flag];
 
-function generateMinefield(
-	rows: number,
-	cols: number,
-	minesCount: number,
-	targetIndex: number,
-	rngSeed?: string,
-): Minefield {
-	const data = Array.from({ length: rows }, () => Array(cols).fill(0));
-	rngSeed ??= Date.now().toString();
-	placeMines(data, cols, targetIndex, minesCount, rngSeed);
-	placeNumbers(data, cols);
-
-	const flags = Array.from({ length: rows }, () => Array(cols).fill(Flags.UNKNOWN));
-	return { rows, cols, data, flags };
-}
-
-function placeMines(data: number[][], cols: number, targetIndex: number, minesCount: number, rngSeed: string): void {
-	const rows = data.length;
+function generateMinefield(minesweeper: Minesweeper, targetIndex: number, seed?: string): void {
+	const minefield = minesweeper.field;
+	const cols = minefield.cols;
+	const rows = minefield.rows;
 	const targetRow = rowOf(targetIndex, cols);
 	const targetCol = colOf(targetIndex, cols);
-	console.log(`Placing mines with seed: ${rngSeed} for [${rows}x${cols}] and target: [${targetRow};${targetCol}]`);
-	const random = Random.fromSeed(rngSeed);
-	const cellsCount = data.length * data[0].length;
+	seed ??= Date.now().toString();
+	const random = Random.fromSeed(seed);
+	console.log(
+		`Generating ${minesweeper.expectedMinesCount} mines for [${rows}x${cols}] with seed "${seed}" at [${targetRow};${targetCol}]`,
+	);
+
+	const MAX_ATTEMPTS = 10;
+	minesweeper.solved = false;
+	minefield.minesCount = minesweeper.expectedMinesCount;
+	let attempt = 0;
+	let startTime = performance.now();
+	const solver = new Solver(minesweeper.field, minesweeper.expectedMinesCount);
+	for (; attempt < MAX_ATTEMPTS; attempt++) {
+		matrix2Fill(minefield.data, NONE);
+		placeMinefieldMines(minefield, targetIndex, random);
+		placeMinefieldNumbers(minefield);
+		minesweeper.field = minefield;
+		minefield.flags = minesweeper.playerFlags;
+		matrix2Fill(minefield.flags, Flag.UNKNOWN);
+		revealCell(minefield, targetRow, targetCol);
+
+		matrix2SetFrom(minesweeper.solverFlags, minefield.flags);
+		matrix2SetFrom(minesweeper.originalFlags, minefield.flags);
+		if (solver.trySolve()) {
+			minesweeper.solved = true;
+			break;
+		}
+	}
+	const timeTook = performance.now() - startTime;
+	if (minesweeper.solved) {
+		console.log(`[Generator] Minefield generated, took ${attempt} attempts and ${timeTook}ms`);
+	} else {
+		console.log(`[Generator] Failed to generate a solvable minefield, tried ${attempt} times in ${timeTook}ms`);
+	}
+}
+
+function placeMinefieldMines(minefield: Minefield, targetIndex: number, random: Random): void {
+	const { rows, cols, data, minesCount } = minefield;
+	const targetRow = rowOf(targetIndex, cols);
+	const targetCol = colOf(targetIndex, cols);
+	const cellsCount = rows * cols;
 	const indices: number[] = [];
 	{
 		for (let index = 0; index < cellsCount; index++) {
@@ -482,8 +496,8 @@ function placeMines(data: number[][], cols: number, targetIndex: number, minesCo
 	}
 }
 
-function placeNumbers(data: number[][], cols: number): void {
-	const rows = data.length;
+function placeMinefieldNumbers(minefield: Minefield): void {
+	const { rows, cols, data } = minefield;
 	for (let row = 0; row < rows; row++) {
 		for (let col = 0; col < cols; col++) {
 			if (data[row][col] === MINE) continue;
@@ -511,16 +525,17 @@ function emptyMinefield(rows: number, cols: number): Minefield {
 		rows,
 		cols,
 		data: Array.from({ length: rows }, () => Array(cols).fill(NONE)),
-		flags: Array.from({ length: rows }, () => Array(cols).fill(Flags.UNKNOWN)),
+		minesCount: 0,
+		flags: Array.from({ length: rows }, () => Array(cols).fill(Flag.UNKNOWN)),
 	};
 }
 
 function revealCell(minefield: Minefield, row: number, col: number): boolean {
 	if (!isInsideMinefield(minefield, row, col)) return false;
-	if (minefield.flags[row][col] === Flags.FLAGGED) return false;
-	if (minefield.flags[row][col] === Flags.REVEALED) return false;
+	if (minefield.flags[row][col] === Flag.FLAGGED) return false;
+	if (minefield.flags[row][col] === Flag.REVEALED) return false;
 	const value = minefield.data[row][col];
-	minefield.flags[row][col] = Flags.REVEALED;
+	minefield.flags[row][col] = Flag.REVEALED;
 	if (value === MINE) return true;
 	if (value === NONE) {
 		for (const [offsetRow, offsetCol] of OFFSETS) {
@@ -534,33 +549,33 @@ function revealCell(minefield: Minefield, row: number, col: number): boolean {
 
 function flagCell(minefield: Minefield, row: number, col: number): boolean {
 	const flag = minefield.flags[row][col];
-	if (flag === Flags.REVEALED) {
+	if (flag === Flag.REVEALED) {
 		console.warn(`[WARNING]: Trying to flag a revealed cell at (${row}:${col})`);
 		return false;
 	}
-	if (flag === Flags.FLAGGED) {
+	if (flag === Flag.FLAGGED) {
 		console.warn(`[WARNING]: Trying to flag an already flagged cell at (${row}:${col})`);
 		return false;
 	}
-	minefield.flags[row][col] = Flags.FLAGGED;
+	minefield.flags[row][col] = Flag.FLAGGED;
 	return true;
 }
 
 function unflagCell(minefield: Minefield, row: number, col: number): void {
 	const flag = minefield.flags[row][col];
-	if (flag === Flags.REVEALED) {
+	if (flag === Flag.REVEALED) {
 		console.warn(`[WARNING]: Trying to unflag a revealed cell at (${row}:${col})`);
 		return;
 	}
-	if (flag === Flags.UNKNOWN) {
+	if (flag === Flag.UNKNOWN) {
 		console.warn(`[WARNING]: Trying to unflag an unknown cell at (${row}:${col})`);
 		return;
 	}
-	minefield.flags[row][col] = Flags.UNKNOWN;
+	minefield.flags[row][col] = Flag.UNKNOWN;
 }
 
 function toggleCellFlag(minefield: Minefield, row: number, col: number): void {
-	if (minefield.flags[row][col] === Flags.FLAGGED) {
+	if (minefield.flags[row][col] === Flag.FLAGGED) {
 		unflagCell(minefield, row, col);
 	} else {
 		flagCell(minefield, row, col);
@@ -572,7 +587,7 @@ function toggleCellFlag(minefield: Minefield, row: number, col: number): void {
  * This is called a chord because in older versions it required pressing two buttons, left + right, at the same time.
  */
 function chordeCell(minefield: Minefield, row: number, col: number): boolean {
-	if (minefield.flags[row][col] !== Flags.REVEALED) return false;
+	if (minefield.flags[row][col] !== Flag.REVEALED) return false;
 	const value = minefield.data[row][col];
 	if (value <= NONE) return false;
 
@@ -580,7 +595,7 @@ function chordeCell(minefield: Minefield, row: number, col: number): boolean {
 	for (const [offsetRow, offsetCol] of OFFSETS) {
 		const neighborRow = row + offsetRow;
 		const neighborCol = col + offsetCol;
-		if (minefield.flags?.[neighborRow]?.[neighborCol] === Flags.FLAGGED) {
+		if (minefield.flags?.[neighborRow]?.[neighborCol] === Flag.FLAGGED) {
 			nearFlagsCount++;
 		}
 	}
@@ -590,7 +605,7 @@ function chordeCell(minefield: Minefield, row: number, col: number): boolean {
 	for (const [offsetRow, offsetCol] of OFFSETS) {
 		const neighborRow = row + offsetRow;
 		const neighborCol = col + offsetCol;
-		if (minefield.flags?.[neighborRow]?.[neighborCol] === Flags.UNKNOWN) {
+		if (minefield.flags?.[neighborRow]?.[neighborCol] === Flag.UNKNOWN) {
 			const exploded = revealCell(minefield, neighborRow, neighborCol);
 			anyExploded ||= exploded;
 		}
@@ -625,18 +640,18 @@ function getCellFlagByIndex(minefield: Minefield, index: number): number | undef
 }
 
 function isCellFlagged(minefield: Minefield, index: number): boolean {
-	return getCellFlagByIndex(minefield, index) === Flags.FLAGGED;
+	return getCellFlagByIndex(minefield, index) === Flag.FLAGGED;
 }
 
 function isCellRevealed(minefield: Minefield, index: number): boolean {
-	return getCellFlagByIndex(minefield, index) === Flags.REVEALED;
+	return getCellFlagByIndex(minefield, index) === Flag.REVEALED;
 }
 
 function isSolved(minefield: Minefield): boolean {
 	for (let row = 0; row < minefield.rows; row++) {
 		for (let col = 0; col < minefield.cols; col++) {
 			const flag = getCellFlag(minefield, row, col);
-			if (flag === Flags.UNKNOWN) return false;
+			if (flag === Flag.UNKNOWN) return false;
 		}
 	}
 	return true;
@@ -723,26 +738,15 @@ class Solver {
 	constructor(minefield: Minefield, minesCount: number) {
 		this.minefield = minefield;
 		this.minesCount = minesCount;
-		for (const index of allIndices(minefield)) {
-			if (isCellRevealed(minefield, index)) {
-				this.todoKnownCells.push(index);
-			}
-		}
 	}
 
 	static trySolve(minesweeper: Minesweeper): boolean {
-		console.log('[Solver] solving...');
 		const { field: minefield, solverFlags } = minesweeper;
 		const prevFlags = minesweeper.field.flags;
 		minefield.flags = solverFlags;
-		const solver = new Solver(minefield, minesweeper.minesCount);
+		const solver = new Solver(minesweeper.field, minesweeper.expectedMinesCount);
 		minesweeper.solved = solver.trySolve();
 		minefield.flags = prevFlags;
-		if (minesweeper.solved) {
-			console.log('[Solver] solved');
-		} else {
-			console.log('[Solver] failed to solve');
-		}
 		return minesweeper.solved;
 	}
 
@@ -750,7 +754,20 @@ class Solver {
 		minesweeper.solverFlags = minesweeper.originalFlags.map((r) => r.slice());
 	}
 
+	reset(): void {
+		this.constraints.length = 0;
+		this.todoConstraints.length = 0;
+		this.todoKnownCells.length = 0;
+		this.changed = false;
+	}
+
 	trySolve(): boolean {
+		this.reset();
+		for (const index of allIndices(this.minefield)) {
+			if (isCellRevealed(this.minefield, index)) {
+				this.todoKnownCells.push(index);
+			}
+		}
 		while (true) {
 			let changed = false;
 
@@ -784,9 +801,7 @@ class Solver {
 			}
 
 			if (!changed) {
-				console.time('[Solver] tryGlobalMineCountDeduction');
 				changed = this.tryGlobalMineCountDeduction() || changed;
-				console.timeEnd('[Solver] tryGlobalMineCountDeduction');
 			}
 
 			if (!changed) {
@@ -813,9 +828,9 @@ class Solver {
 				rowOf(neighborIndex, minefield.cols),
 				colOf(neighborIndex, minefield.cols),
 			);
-			if (flag === Flags.FLAGGED) {
+			if (flag === Flag.FLAGGED) {
 				minesToFindCount -= 1;
-			} else if (flag === Flags.UNKNOWN) {
+			} else if (flag === Flag.UNKNOWN) {
 				unknownNeighbors.add(neighborIndex);
 			}
 		}
@@ -858,8 +873,8 @@ class Solver {
 	private reduceConstrainsMineCountForIndex(index: number): number {
 		let updatedCount = 0;
 		const flag = getCellFlagByIndex(this.minefield, index);
-		if (flag === Flags.UNKNOWN) return updatedCount;
-		const isMine = flag === Flags.FLAGGED;
+		if (flag === Flag.UNKNOWN) return updatedCount;
+		const isMine = flag === Flag.FLAGGED;
 		for (const constraint of this.constraints) {
 			if (!constraint.cells.has(index)) continue;
 			constraint.cells.delete(index);
@@ -1067,10 +1082,10 @@ class Solver {
 		const row = rowOf(index, minefield.cols);
 		const col = colOf(index, minefield.cols);
 		if (!isInsideMinefield(minefield, row, col)) return false;
-		if (minefield.flags[row][col] === Flags.FLAGGED) return false;
-		if (minefield.flags[row][col] === Flags.REVEALED) return false;
+		if (minefield.flags[row][col] === Flag.FLAGGED) return false;
+		if (minefield.flags[row][col] === Flag.REVEALED) return false;
 		const value = minefield.data[row][col];
-		minefield.flags[row][col] = Flags.REVEALED;
+		minefield.flags[row][col] = Flag.REVEALED;
 		if (value === MINE) return true;
 		if (value === NONE) {
 			for (const neighborIndex of neighborIndices(minefield, index)) {
@@ -1079,5 +1094,24 @@ class Solver {
 		}
 		this.todoKnownCells.push(index);
 		return true;
+	}
+}
+
+function matrix2Fill(matrix: number[][], value: number): void {
+	for (let i = 0; i < matrix.length; i++) {
+		for (let j = 0; j < matrix[i].length; j++) {
+			matrix[i][j] = value;
+		}
+	}
+}
+
+function matrix2SetFrom(target: number[][], source: number[][]): void {
+	if (target.length !== source.length || target[0]?.length !== source[0]?.length) {
+		throw new Error('Matrices must have the same dimensions');
+	}
+	for (let i = 0; i < target.length; i++) {
+		for (let j = 0; j < target[i].length; j++) {
+			target[i][j] = source[i][j];
+		}
 	}
 }
