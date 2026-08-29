@@ -6,7 +6,6 @@ import './style.css';
 
 /*
 TODO:
-- Improve minefield generation UX - board freezes (add animation?).
 - Add a cool win animation.
 - Add a cool lose animation (some kind of explosion?).
 - Add a clock.
@@ -14,6 +13,8 @@ TODO:
 - Add sounds (with mute option).
 - Allow optionally specifying the seed for minefield generation in the URL.
 - Add a second "theme" where number color is displayed as text instead of a background.
+- PERF: Change array to be index based instead of 2d array.
+- TODO: Rename Flag to Mark and functions to markFlagged, etc
 */
 
 const Color = {
@@ -63,7 +64,7 @@ type Minefield = {
 const PADDING_WINDOW = 0.05;
 const PADDING_CELL = 0.1;
 const CELL_RADIUS = 4;
-const DEFAULT_MINES_COUNT = 99;
+const DEFAULT_MINE_DENSITY = 0.23;
 const DEFAULT_ROWS = 16;
 const DEFAULT_COLS = 30;
 
@@ -119,14 +120,15 @@ async function main(): Promise<void> {
 
 	const tick = () => {
 		if (!globalThis.minesweeper || input.isPressed('KeyR')) {
-			console.log('INFO: Initializing minesweeper');
+			console.debug('INFO: Initializing minesweeper');
 			const field = emptyMinefield(rows, cols);
+			const expectedMinesCount = Math.round(field.rows * field.cols * DEFAULT_MINE_DENSITY);
 			globalThis.minesweeper = {
 				field: field,
 				playerFlags: field.flags,
 				originalFlags: field.flags.map((r) => r.slice()),
 				solverFlags: field.flags.map((r) => r.slice()),
-				expectedMinesCount: DEFAULT_MINES_COUNT,
+				expectedMinesCount: expectedMinesCount,
 				generated: false,
 				done: false,
 				solved: false,
@@ -303,10 +305,10 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 			if (exploded) {
 				minesweeper.done = true;
 			}
-			console.log(`Revealed cell at ${cell.row}:${cell.col}`);
+			console.debug(`Revealed cell at ${cell.row}:${cell.col}`);
 		}
 		if (input.isPressed('MouseRight')) {
-			console.log(`Flagged cell at ${cell.row}:${cell.col}`);
+			console.debug(`Flagged cell at ${cell.row}:${cell.col}`);
 			toggleCellFlag(minesweeper.field, cell.row, cell.col);
 			cell.flagged = !cell.flagged;
 		}
@@ -323,16 +325,16 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 	}
 
 	if (!minesweeper.generated && cell.hovered && !cell.revealed && input.isPressed('MouseLeft')) {
-		minesweeper.generated = true;
 		generateMinefield(minesweeper, indexOf(cell.row, cell.col, minesweeper.field.cols));
 		cell.revealed = true;
+		minesweeper.generated = true;
 	}
 }
 
 function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, cell: CellInfo): void {
 	let cellColor = Color.CELL;
 	const value = minesweeper.field.data[cell.row][cell.col];
-	if (cell.flagged) {
+	if (cell.flagged && !config.debugReveal) {
 		if (cell.hovered) {
 			cellColor = Color.CELL_HOVER;
 		}
@@ -385,7 +387,7 @@ function initColors(): void {
 	setColors(getComputedStyle(document.documentElement));
 	if (import.meta.hot) {
 		import.meta.hot.on('vite:afterUpdate', () => {
-			console.log('Styles hot reloaded');
+			console.debug('Styles hot reloaded');
 			setColors(getComputedStyle(document.documentElement));
 		});
 	}
@@ -423,6 +425,7 @@ const Flag = {
 } as const;
 type Flag = (typeof Flag)[keyof typeof Flag];
 
+const MAX_GENERATION_ATTEMPTS = 100;
 function generateMinefield(minesweeper: Minesweeper, targetIndex: number, seed?: string): void {
 	const minefield = minesweeper.field;
 	const cols = minefield.cols;
@@ -431,19 +434,22 @@ function generateMinefield(minesweeper: Minesweeper, targetIndex: number, seed?:
 	const targetCol = colOf(targetIndex, cols);
 	seed ??= Date.now().toString();
 	const random = Random.fromSeed(seed);
-	console.log(
+	console.debug(
 		`Generating ${minesweeper.expectedMinesCount} mines for [${rows}x${cols}] with seed "${seed}" at [${targetRow};${targetCol}]`,
 	);
 
-	const MAX_ATTEMPTS = 10;
 	minesweeper.solved = false;
 	minefield.minesCount = minesweeper.expectedMinesCount;
 	let attempt = 0;
 	let startTime = performance.now();
 	const solver = new Solver(minesweeper.field, minesweeper.expectedMinesCount);
-	for (; attempt < MAX_ATTEMPTS; attempt++) {
-		matrix2Fill(minefield.data, NONE);
-		placeMinefieldMines(minefield, targetIndex, random);
+	for (; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
+		if (attempt % 5 === 0) {
+			matrix2Fill(minefield.data, NONE);
+			placeMinefieldMines(minefield, targetIndex, random);
+		} else {
+			shuffleUnknownCells(minefield, random);
+		}
 		placeMinefieldNumbers(minefield);
 		minesweeper.field = minefield;
 		minefield.flags = minesweeper.playerFlags;
@@ -459,9 +465,9 @@ function generateMinefield(minesweeper: Minesweeper, targetIndex: number, seed?:
 	}
 	const timeTook = performance.now() - startTime;
 	if (minesweeper.solved) {
-		console.log(`[Generator] Minefield generated, took ${attempt} attempts and ${timeTook}ms`);
+		console.debug(`[Generator] Minefield generated, took ${attempt} attempts and ${timeTook}ms`);
 	} else {
-		console.log(`[Generator] Failed to generate a solvable minefield, tried ${attempt} times in ${timeTook}ms`);
+		console.error(`[Generator] Failed to generate a solvable minefield, tried ${attempt} times in ${timeTook}ms`);
 	}
 }
 
@@ -517,6 +523,36 @@ function placeMinefieldNumbers(minefield: Minefield): void {
 			}
 			data[row][col] = neighborMines;
 		}
+	}
+}
+
+function shuffleUnknownCells(minefield: Minefield, random: Random): void {
+	const cols = minefield.cols;
+	const unknownIndices: number[] = [];
+	for (let index of allIndices(minefield)) {
+		const flag = getCellFlagByIndex(minefield, index);
+		if (flag === Flag.UNKNOWN) {
+			unknownIndices.push(index);
+		}
+	}
+	for (let i = 0; i < unknownIndices.length; i++) {
+		const j = i + random.int32Range(0, unknownIndices.length - i);
+		{
+			const temp = unknownIndices[i];
+			unknownIndices[i] = unknownIndices[j];
+			unknownIndices[j] = temp;
+		}
+		const indexI = unknownIndices[i];
+		const indexJ = unknownIndices[j];
+		const rowI = rowOf(indexI, cols);
+		const colI = colOf(indexI, cols);
+		const rowJ = rowOf(indexJ, cols);
+		const colJ = colOf(indexJ, cols);
+		const temp = minefield.data[rowI][colI];
+		minefield.data[rowI][colI] = minefield.data[rowJ][colJ];
+		minefield.data[rowJ][colJ] = temp;
+		minefield.flags[rowI][colI] = Flag.UNKNOWN;
+		minefield.flags[rowJ][colJ] = Flag.UNKNOWN;
 	}
 }
 
@@ -727,6 +763,10 @@ function constraintEquals(a: Constraint, b: Constraint): boolean {
 	return a.minesCount === b.minesCount && a.cells.size === b.cells.size && a.cells.isSupersetOf(b.cells);
 }
 
+function isConstraintEmpty(constraint: Constraint): boolean {
+	return constraint.cells.size === 0 && constraint.minesCount === 0;
+}
+
 class Solver {
 	minefield: Minefield;
 	minesCount: number;
@@ -779,9 +819,11 @@ class Solver {
 				}
 				changed = this.reduceConstrainsMineCountForIndex(index) > 0 || changed;
 			}
+			this.constraints = this.constraints.filter((c) => !isConstraintEmpty(c));
 
 			const constraint = this.todoConstraints.pop();
 			if (constraint != null) {
+				if (isConstraintEmpty(constraint)) continue;
 				if (constraint.minesCount === 0) {
 					for (const index of constraint.cells) {
 						changed = this.revealCell(index) || changed;
