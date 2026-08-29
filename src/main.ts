@@ -616,10 +616,6 @@ function getCellValue(minefield: Minefield, row: number, col: number): number | 
 	return minefield.data?.[row]?.[col];
 }
 
-function getCellValueByIndex(minefield: Minefield, index: number): number | undefined {
-	return getCellValue(minefield, rowOf(index, minefield.cols), colOf(index, minefield.cols));
-}
-
 function getCellFlag(minefield: Minefield, row: number, col: number): number | undefined {
 	return minefield.flags?.[row]?.[col];
 }
@@ -768,8 +764,9 @@ function trySolve(minesweeper: Minesweeper): boolean {
 			break;
 		}
 	}
-	minefield.flags = originalFlags;
 	const solved = isSolved(minefield);
+	minesweeper.solved = solved;
+	minefield.flags = originalFlags;
 	if (solved) {
 		console.log('[Solver] solved');
 	} else {
@@ -848,7 +845,9 @@ function constraintEquals(a: Constraint, b: Constraint): boolean {
 
 function solverReduceConstrainsMineCountForIndex(solver: Solver, index: number): number {
 	let updatedCount = 0;
-	const isMine = getCellValueByIndex(solver.minefield, index) === MINE;
+	const flag = getCellFlagByIndex(solver.minefield, index);
+	if (flag === Flags.UNKNOWN) return updatedCount;
+	const isMine = flag === Flags.FLAGGED;
 	for (const constraint of solver.constraints) {
 		if (!constraint.cells.has(index)) continue;
 		constraint.cells.delete(index);
@@ -856,6 +855,7 @@ function solverReduceConstrainsMineCountForIndex(solver: Solver, index: number):
 			constraint.minesCount -= 1;
 		}
 		solver.todoConstraints.push(constraint);
+		updatedCount++;
 	}
 	return updatedCount;
 }
@@ -864,13 +864,11 @@ function solverCompareConstraints(solver: Solver, a: Constraint, b: Constraint):
 	if (a.cells.isSubsetOf(b.cells)) {
 		const deltaCells = b.cells.difference(a.cells);
 		const deltaMinesCount = b.minesCount - a.minesCount;
-		solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
-		return true;
+		return solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
 	} else if (b.cells.isSubsetOf(a.cells)) {
 		const deltaCells = a.cells.difference(b.cells);
 		const deltaMinesCount = a.minesCount - b.minesCount;
-		solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
-		return true;
+		return solverAddConstraint(solver, { cells: deltaCells, minesCount: deltaMinesCount });
 	}
 	return false;
 }
@@ -884,22 +882,18 @@ function solverCompareOverlapping(solver: Solver, a: Constraint, b: Constraint):
 
 	if (deltaMinesCount === aOnlyCells.size) {
 		for (const index of aOnlyCells) {
-			solverFlag(solver, index);
-			changed = true;
+			changed = solverFlag(solver, index) || changed;
 		}
 		for (const index of bOnlyCells) {
-			solverReveal(solver, index);
-			changed = true;
+			changed = solverReveal(solver, index) || changed;
 		}
 	}
 	if (-deltaMinesCount === bOnlyCells.size) {
 		for (const index of aOnlyCells) {
-			solverReveal(solver, index);
-			changed = true;
+			changed = solverReveal(solver, index) || changed;
 		}
 		for (const index of bOnlyCells) {
-			solverFlag(solver, index);
-			changed = true;
+			changed = solverFlag(solver, index) || changed;
 		}
 	}
 	return changed;
@@ -917,21 +911,27 @@ function solverTryGlobalMineCountDeduction(solver: Solver): boolean {
 		}
 	}
 
-	const remainingMines = solver.minesCount - knownMines;
-	const remainingSafe = unknownCells.length - remainingMines;
+	if (unknownCells.length === 0) return false;
 
-	if (remainingMines === 0) {
+	const remainingMinesCount = solver.minesCount - knownMines;
+	const remainingSafeCount = unknownCells.length - remainingMinesCount;
+
+	if (remainingMinesCount === 0) {
 		for (const index of unknownCells) solverReveal(solver, index);
 		return true;
 	}
 
-	if (remainingSafe === 0) {
+	if (remainingSafeCount === 0) {
 		for (const index of unknownCells) solverFlag(solver, index);
 		return true;
 	}
 
 	// TODO: Understand these.
-	const mineConstraints = solverFindDisjointConstraintGroups(solver.constraints, remainingMines, (c) => c.minesCount);
+	const mineConstraints = solverFindDisjointConstraintGroups(
+		solver.constraints,
+		remainingMinesCount,
+		(c) => c.minesCount,
+	);
 	if (mineConstraints) {
 		let changed = false;
 		const coveredCells = getAllConstraintCells(mineConstraints);
@@ -947,7 +947,7 @@ function solverTryGlobalMineCountDeduction(solver: Solver): boolean {
 
 	const safeConstraints = solverFindDisjointConstraintGroups(
 		solver.constraints,
-		remainingSafe,
+		remainingSafeCount,
 		(c) => c.cells.size - c.minesCount,
 	);
 	if (safeConstraints) {
@@ -971,10 +971,20 @@ function solverFindDisjointConstraintGroups(
 	target: number,
 	getValue: (constraint: Constraint) => number,
 ): Constraint[] | null {
+	const MAX_CONSTRAINTS = 500;
+	const MAX_SEARCH_STATES = 100_000;
+	if (constraints.length > MAX_CONSTRAINTS) return null;
 	const group: Constraint[] = [];
 	const usedCells = new Set<number>();
+	let searchedStates = 0;
+	let searchLimitReached = false;
 
-	function search(start: number, value: number): Constraint[] | null {
+	function search(startIndex: number, value: number): Constraint[] | null {
+		searchedStates++;
+		if (searchedStates > MAX_SEARCH_STATES) {
+			searchLimitReached = true;
+			return null;
+		}
 		if (value === target) {
 			return group.slice();
 		}
@@ -983,8 +993,10 @@ function solverFindDisjointConstraintGroups(
 			return null;
 		}
 
-		for (let i = start; i < constraints.length; i++) {
-			const constraint = constraints[i];
+		for (let constraintIndex = startIndex; constraintIndex < constraints.length; constraintIndex++) {
+			const constraint = constraints[constraintIndex];
+			const constraintValue = getValue(constraint);
+			if (constraintValue === 0) continue;
 
 			let overlaps = false;
 
@@ -997,7 +1009,7 @@ function solverFindDisjointConstraintGroups(
 
 			if (overlaps) continue;
 
-			const nextValue = value + getValue(constraint);
+			const nextValue = value + constraintValue;
 
 			// Important pruning
 			if (nextValue > target) continue;
@@ -1005,8 +1017,8 @@ function solverFindDisjointConstraintGroups(
 			group.push(constraint);
 			for (const cell of constraint.cells) usedCells.add(cell);
 
-			const result = search(i + 1, nextValue);
-			if (result) return result;
+			const result = search(constraintIndex + 1, nextValue);
+			if (result || searchLimitReached) return result;
 
 			group.pop();
 			for (const cell of constraint.cells) usedCells.delete(cell);
