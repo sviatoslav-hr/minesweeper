@@ -7,14 +7,17 @@ import './style.css';
 
 /*
 TODO:
-- Add a cool win animation.
-- Add a cool lose animation (some kind of explosion?).
+- Add pause button (and key) that hides the minefield until unpaused.
+- Add a mute button (and key).
 - Add a scoreboard.
-- Add a mute option.
+- Add multiple presets with different minefield sizes and difficulty levels.
 - Allow optionally specifying the seed for minefield generation in the URL.
 - Add a second "theme" where number color is displayed as text instead of a background.
+- If screen is vertical, rotate the board.
 - PERF: Change array to be index based instead of 2d array.
 - TODO: Rename Flag to Mark and functions to markFlagged, etc
+- Add a cool win animation.
+- Add a cool lose animation (some kind of explosion?).
 */
 
 const Color = {
@@ -64,9 +67,9 @@ type Minefield = {
 	flags: number[][]; // 0 = unknown, 1 = flagged, 2 = revealed
 };
 
-const PADDING_WINDOW = 0.01;
+const PADDING_CANVAS = 0.01;
 const PADDING_CELL = 0.07;
-const TOPBAR_HEIGHT = 0.1;
+const TOPBAR_HEIGHT = 0.07;
 const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
 const DEFAULT_MINE_DENSITY = 0.21;
@@ -240,25 +243,28 @@ type GameConfig = {
 function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, images: GameImages): GameConfig {
 	const { rows, cols } = minesweeper.field;
 	const shortestCanvasSide = Math.min(canvas.width, canvas.height);
-	let topbarHeight = shortestCanvasSide * TOPBAR_HEIGHT;
-	const canvasPadding = shortestCanvasSide * PADDING_WINDOW;
-	const fieldWidth = canvas.width - canvasPadding * 2;
-	const fieldHeight = canvas.height - topbarHeight - canvasPadding * 2;
-	topbarHeight -= canvasPadding;
-	const cellSizeX = fieldWidth / (cols + (cols - 1) * PADDING_CELL);
-	const cellSizeY = fieldHeight / (rows + (rows - 1) * PADDING_CELL);
-	const cellSize = Math.min(cellSizeX, cellSizeY);
-	const cellPadding = cellSize * PADDING_CELL;
-	const gridWidth = cols * cellSize + (cols - 1) * cellPadding;
-	const gridHeight = rows * cellSize + (rows - 1) * cellPadding;
-	const gridXOffset = (canvas.width - gridWidth) / 2;
-	const gridYOffset = (canvas.height + topbarHeight - gridHeight) / 2;
-	const topbarYOffset = gridYOffset - topbarHeight - canvasPadding;
+	const outerPadding = shortestCanvasSide * PADDING_CANVAS;
+
+	const topbarHeight = shortestCanvasSide * TOPBAR_HEIGHT;
+	const topbarYOffset = outerPadding;
 	const topbarFont: FontRendered = { size: topbarHeight * 0.8, weight: 700, family: 'Arial' };
 	const topbarIconSize = topbarHeight * 0.8;
 	const topbarIconY = topbarYOffset + topbarHeight / 2 - topbarIconSize / 2;
 
+	const gridSpaceWidth = canvas.width - outerPadding * 2;
+	const gridSpaceHeight = canvas.height - topbarHeight - outerPadding * 3; // 1 pad top, 1 bottom, 1 between topbar and grid
+
+	const cellPadding = Math.min(gridSpaceWidth / cols, gridSpaceHeight / rows) * PADDING_CELL;
+	const cellMaxWidth = (gridSpaceWidth - (cols - 1) * cellPadding) / cols;
+	const cellMaxHeight = (gridSpaceHeight - (rows - 1) * cellPadding) / rows;
+	const cellSize = Math.min(cellMaxWidth, cellMaxHeight);
 	const cellFont: FontRendered = { size: cellSize * 0.8, weight: 700, family: 'Arial' };
+
+	const gridWidth = cols * cellSize + (cols - 1) * cellPadding;
+	const gridHeight = rows * cellSize + (rows - 1) * cellPadding;
+	const gridXOffset = (canvas.width - gridWidth) / 2;
+	const gridYOffset = topbarYOffset + topbarHeight + outerPadding;
+
 	return {
 		cellSize,
 		cellPadding,
