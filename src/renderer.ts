@@ -45,10 +45,7 @@ export class Renderer2d {
 		this.camera = camera;
 		// NOTE: Store font size to avoid precision issues when restoring it back.
 		this.fontBeforeCameraMode = this.font;
-		this.setFont(
-			{ ...this.font, size: this.font.size * camera.scale },
-			true,
-		);
+		this.setFont({ ...this.font, size: this.font.size * camera.scale }, true);
 	}
 
 	endCameraMode() {
@@ -62,13 +59,7 @@ export class Renderer2d {
 	}
 
 	drawRect(rect: Rect, color: string): void;
-	drawRect(
-		x: number,
-		y: number,
-		width: number,
-		height: number,
-		color: string,
-	): void;
+	drawRect(x: number, y: number, width: number, height: number, color: string): void;
 	drawRect(
 		xOrRect: number | Rect,
 		yOrColor: number | string,
@@ -107,13 +98,16 @@ export class Renderer2d {
 		this.context.fill();
 	}
 
-	drawImage(
-		src: CanvasImageSource,
-		dx: number,
-		dy: number,
-		dw: number,
-		dh: number,
-	): void {
+	drawRectOutline(rect: Rect, color: string, lineWidth = 1): void {
+		this.context.strokeStyle = color;
+		this.context.lineWidth = lineWidth;
+		if (this.camera) {
+			rect = this.camera.toScreenRect(rect);
+		}
+		this.context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+	}
+
+	drawImage(src: CanvasImageSource, dx: number, dy: number, dw: number, dh: number): void {
 		let dest: Rect = { x: dx, y: dy, width: dw, height: dh };
 		if (this.camera != null) {
 			if (!isRectVisible(this.camera, dest)) {
@@ -195,14 +189,12 @@ export class Camera {
 	}
 
 	toScreenX(worldX: number): number {
-		const screenX =
-			(worldX - this.worldOffset.x) * this.scale + this.screenOffset.x;
+		const screenX = (worldX - this.worldOffset.x) * this.scale + this.screenOffset.x;
 		return screenX;
 	}
 
 	toScreenY(worldY: number): number {
-		const screenY =
-			(worldY - this.worldOffset.y) * this.scale + this.screenOffset.y;
+		const screenY = (worldY - this.worldOffset.y) * this.scale + this.screenOffset.y;
 		return screenY;
 	}
 
@@ -223,13 +215,11 @@ export class Camera {
 	}
 
 	toWorldX(screenX: number): number {
-		const worldX =
-			(screenX - this.screenOffset.x) / this.scale + this.worldOffset.x;
+		const worldX = (screenX - this.screenOffset.x) / this.scale + this.worldOffset.x;
 		return worldX;
 	}
 	toWorldY(screenY: number): number {
-		const worldY =
-			(screenY - this.screenOffset.y) / this.scale + this.worldOffset.y;
+		const worldY = (screenY - this.screenOffset.y) / this.scale + this.worldOffset.y;
 		return worldY;
 	}
 }

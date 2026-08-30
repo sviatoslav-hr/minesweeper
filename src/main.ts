@@ -8,7 +8,6 @@ import './style.css';
 TODO:
 - Add a cool win animation.
 - Add a cool lose animation (some kind of explosion?).
-- Add a clock.
 - Add a scoreboard.
 - Add sounds (with mute option).
 - Allow optionally specifying the seed for minefield generation in the URL.
@@ -24,7 +23,8 @@ const Color = {
 	CELL_EMPTY: '--color-cell-empty',
 	CELL_WRONG: '--color-cell-wrong',
 	CELL_EXPLODED: '--color-cell-exploded',
-	TEXT: '--color-text',
+	CELL_TEXT: '--color-cell-text',
+	TEXT_TOPBAR: '--color-text-topbar',
 	NUMBER1: '--color-number-1',
 	NUMBER2: '--color-number-2',
 	NUMBER3: '--color-number-3',
@@ -51,6 +51,8 @@ type Minesweeper = {
 	generated: boolean;
 	solved: boolean;
 	done: boolean;
+	failed: boolean;
+	time: number;
 };
 
 type Minefield = {
@@ -61,12 +63,14 @@ type Minefield = {
 	flags: number[][]; // 0 = unknown, 1 = flagged, 2 = revealed
 };
 
-const PADDING_WINDOW = 0.05;
+const PADDING_WINDOW = 0.01;
 const PADDING_CELL = 0.1;
+const TOPBAR_HEIGHT = 0.1;
+const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
 const DEFAULT_MINE_DENSITY = 0.23;
-const DEFAULT_ROWS = 16;
-const DEFAULT_COLS = 30;
+const DEFAULT_ROWS = 8;
+const DEFAULT_COLS = 8;
 
 async function main(): Promise<void> {
 	console.log('[INFO]: Game version 0.1');
@@ -91,8 +95,14 @@ async function main(): Promise<void> {
 
 	const savedMinesweeper = storage.getItem('minesweeper');
 	if (savedMinesweeper) {
-		globalThis.minesweeper = JSON.parse(savedMinesweeper);
-		minesweeper!.playerFlags = minesweeper!.field.flags;
+		const saved = JSON.parse(savedMinesweeper) as Minesweeper;
+		saved.time = Number.isFinite(saved.time) ? saved.time : 0;
+		saved.failed ??= hasRevealedMine(saved.field);
+		saved.playerFlags = saved.field.flags;
+		if (saved.generated && !saved.done && !saved.failed) {
+			finishGameIfSolved(saved);
+		}
+		globalThis.minesweeper = saved;
 	}
 
 	const images = await loadImages();
@@ -118,33 +128,38 @@ async function main(): Promise<void> {
 
 	let showSolverFlags = false;
 
-	const tick = () => {
+	let lastTime = performance.now();
+	const tick = (time: number) => {
+		const deltaTime = time - lastTime;
+		lastTime = time;
+
 		if (!globalThis.minesweeper || input.isPressed('KeyR')) {
-			console.debug('INFO: Initializing minesweeper');
-			const field = emptyMinefield(rows, cols);
-			const expectedMinesCount = Math.round(field.rows * field.cols * DEFAULT_MINE_DENSITY);
-			globalThis.minesweeper = {
-				field: field,
-				playerFlags: field.flags,
-				originalFlags: field.flags.map((r) => r.slice()),
-				solverFlags: field.flags.map((r) => r.slice()),
-				expectedMinesCount: expectedMinesCount,
-				generated: false,
-				done: false,
-				solved: false,
-			};
+			globalThis.minesweeper = createMinesweeper(rows, cols);
 		}
-		const minesweeper = globalThis.minesweeper;
+		let minesweeper = globalThis.minesweeper;
 
 		r.fillScreen(Color.BACKGROUND);
 
-		const config = computeConfig(canvas, minesweeper, images);
+		let config = computeConfig(canvas, minesweeper, images);
+		const smileyHovered = isInsideRect(input.getMousePosition(), getSmileyRect(config));
+		if (smileyHovered && input.isPressed('MouseLeft')) {
+			minesweeper = createMinesweeper(rows, cols);
+			globalThis.minesweeper = minesweeper;
+			config = computeConfig(canvas, minesweeper, images);
+		}
 		config.debugReveal = input.isDown('Space');
-		let isAnyHovered = false;
+
+		if (minesweeper?.generated && !minesweeper.done) {
+			minesweeper.time += deltaTime;
+		}
+
+		let isAnyHovered = smileyHovered;
 		if (minesweeper.done && input.isPressed('KeyP')) {
 			globalThis.minesweeper = {
 				...minesweeper,
 				done: false,
+				failed: false,
+				time: 0,
 				playerFlags: minesweeper.originalFlags.map((r) => r.slice()),
 			};
 		}
@@ -161,7 +176,9 @@ async function main(): Promise<void> {
 			Solver.resetFlags(minesweeper);
 		}
 
-		r.setFont(config.font);
+		drawTopbar(r, minesweeper, config, images);
+
+		r.setFont(config.cellFont);
 		r.context.textBaseline = config.textBaseline;
 		r.context.textAlign = config.textAlign;
 
@@ -195,14 +212,37 @@ async function main(): Promise<void> {
 	requestAnimationFrame(tick);
 }
 
+function createMinesweeper(rows: number, cols: number): Minesweeper {
+	console.debug('INFO: Initializing minesweeper');
+	const field = emptyMinefield(rows, cols);
+	const expectedMinesCount = Math.round(field.rows * field.cols * DEFAULT_MINE_DENSITY);
+	return {
+		field,
+		playerFlags: field.flags,
+		originalFlags: field.flags.map((row) => row.slice()),
+		solverFlags: field.flags.map((row) => row.slice()),
+		expectedMinesCount,
+		generated: false,
+		done: false,
+		failed: false,
+		solved: false,
+		time: 0,
+	};
+}
+
 type GameConfig = {
 	cellSize: number;
 	cellPadding: number;
+	cellFont: FontRendered;
 	gridWidth: number;
 	gridHeight: number;
 	gridXOffset: number;
 	gridYOffset: number;
-	font: FontRendered;
+	topbarYOffset: number;
+	topbarHeight: number;
+	topbarIconY: number;
+	topbarIconSize: number;
+	topbarFont: FontRendered;
 	textBaseline: CanvasTextBaseline;
 	textAlign: CanvasTextAlign;
 	debugReveal: boolean;
@@ -211,32 +251,40 @@ type GameConfig = {
 
 function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, images: GameImages): GameConfig {
 	const { rows, cols } = minesweeper.field;
-	const windowPadding = Math.min(canvas.width, canvas.height) * PADDING_WINDOW;
-	const containerWidth = canvas.width - windowPadding * 2;
-	const containerHeight = canvas.height - windowPadding * 2;
-	const rawCellWidth = containerWidth / cols;
-	const rawCellHeight = containerHeight / cols;
-	const rawCellSize = Math.min(rawCellWidth, rawCellHeight);
-	const cellPadding = rawCellSize * PADDING_CELL;
-	const cellSizeX = (containerWidth - cellPadding * (cols - 1)) / cols;
-	const cellSizeY = (containerHeight - cellPadding * (rows - 1)) / rows;
+	const shortestCanvasSide = Math.min(canvas.width, canvas.height);
+	let topbarHeight = shortestCanvasSide * TOPBAR_HEIGHT;
+	const canvasPadding = shortestCanvasSide * PADDING_WINDOW;
+	const fieldWidth = canvas.width - canvasPadding * 2;
+	const fieldHeight = canvas.height - topbarHeight - canvasPadding * 2;
+	topbarHeight -= canvasPadding;
+	const cellSizeX = fieldWidth / (cols + (cols - 1) * PADDING_CELL);
+	const cellSizeY = fieldHeight / (rows + (rows - 1) * PADDING_CELL);
 	const cellSize = Math.min(cellSizeX, cellSizeY);
+	const cellPadding = cellSize * PADDING_CELL;
 	const gridWidth = cols * cellSize + (cols - 1) * cellPadding;
 	const gridHeight = rows * cellSize + (rows - 1) * cellPadding;
 	const gridXOffset = (canvas.width - gridWidth) / 2;
-	const gridYOffset = (canvas.height - gridHeight) / 2;
+	const gridYOffset = (canvas.height + topbarHeight - gridHeight) / 2;
+	const topbarYOffset = gridYOffset - topbarHeight - canvasPadding;
+	const topbarFont: FontRendered = { size: topbarHeight * 0.8, weight: 700, family: 'Arial' };
+	const topbarIconSize = topbarHeight * 0.8;
+	const topbarIconY = topbarYOffset + topbarHeight / 2 - topbarIconSize / 2;
 
-	const fontSize = cellSize * 0.8;
-	const font: FontRendered = { size: fontSize, weight: 700, family: 'Arial' };
+	const cellFont: FontRendered = { size: cellSize * 0.8, weight: 700, family: 'Arial' };
 	return {
 		cellSize,
 		cellPadding,
+		cellFont,
 		gridWidth,
 		gridHeight,
 		gridXOffset,
 		gridYOffset,
+		topbarYOffset,
+		topbarHeight,
+		topbarIconY,
+		topbarIconSize,
+		topbarFont,
 		images,
-		font,
 		textBaseline: 'middle',
 		textAlign: 'center',
 		debugReveal: false,
@@ -304,13 +352,18 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 			const exploded = revealCell(minesweeper.field, cell.row, cell.col);
 			if (exploded) {
 				minesweeper.done = true;
+				minesweeper.failed = true;
+			} else {
+				finishGameIfSolved(minesweeper);
 			}
 			console.debug(`Revealed cell at ${cell.row}:${cell.col}`);
 		}
 		if (input.isPressed('MouseRight')) {
+			if (!cell.flagged && countFlags(minesweeper.field) >= minesweeper.field.minesCount) return;
 			console.debug(`Flagged cell at ${cell.row}:${cell.col}`);
 			toggleCellFlag(minesweeper.field, cell.row, cell.col);
 			cell.flagged = !cell.flagged;
+			finishGameIfSolved(minesweeper);
 		}
 		return;
 	}
@@ -320,6 +373,9 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 		const exploded = chordeCell(minesweeper.field, cell.row, cell.col);
 		if (exploded) {
 			minesweeper.done = true;
+			minesweeper.failed = true;
+		} else {
+			finishGameIfSolved(minesweeper);
 		}
 		return;
 	}
@@ -328,7 +384,76 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 		generateMinefield(minesweeper, indexOf(cell.row, cell.col, minesweeper.field.cols));
 		cell.revealed = true;
 		minesweeper.generated = true;
+		finishGameIfSolved(minesweeper);
 	}
+}
+
+function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig, images: GameImages) {
+	r.context.textBaseline = config.textBaseline;
+	r.context.textAlign = config.textAlign;
+	r.drawRectRounded(
+		{ x: config.gridXOffset, y: config.topbarYOffset, width: config.gridWidth, height: config.topbarHeight },
+		TOPBAR_RADIUS,
+		Color.CELL_EMPTY,
+	);
+	const topbarYCenter = config.topbarYOffset + config.topbarHeight / 2;
+	const paddingX = config.topbarHeight * 0.1;
+	const time = minesweeper.generated ? minesweeper.time : 0;
+	const minesRemaining = minesweeper.generated
+		? Math.max(0, minesweeper.field.minesCount - countFlags(minesweeper.field))
+		: minesweeper.expectedMinesCount;
+	r.setFont(config.topbarFont);
+	{
+		let x = config.gridXOffset + paddingX;
+		r.drawImage(images.clock, x, config.topbarIconY, config.topbarIconSize, config.topbarIconSize);
+		x += config.topbarIconSize + paddingX;
+		let text = timeToHumanString(time);
+		let m = r.measureText(text);
+		let textY = topbarYCenter;
+		{
+			x += m.width / 2;
+			const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
+			textY += ascentDiff / 2;
+			r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
+		}
+	}
+	{
+		let image: HTMLImageElement | undefined;
+		if (minesweeper.generated && minesweeper.done) {
+			image = minesweeper.failed ? images.smileyDead : images.smileyCool;
+		} else {
+			image = images.smiley;
+		}
+		const smileyRect = getSmileyRect(config);
+		r.drawImage(image, smileyRect.x, smileyRect.y, smileyRect.width, smileyRect.height);
+	}
+	{
+		// Start from the right edge of the grid
+		let x = config.gridXOffset + config.gridWidth;
+		{
+			x -= config.topbarIconSize;
+			x -= paddingX;
+			r.drawImage(images.mine, x, config.topbarIconY, config.topbarIconSize, config.topbarIconSize);
+		}
+		const text = minesRemaining.toString().padStart(3, '0');
+		const m = r.measureText(text);
+		let textY = topbarYCenter;
+		{
+			x -= paddingX + m.width / 2;
+			const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
+			textY += ascentDiff / 2;
+			r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
+		}
+	}
+}
+
+function getSmileyRect(config: GameConfig): Rect {
+	return {
+		x: config.gridXOffset + config.gridWidth / 2 - config.topbarIconSize / 2,
+		y: config.topbarYOffset + config.topbarHeight / 2 - config.topbarIconSize / 2,
+		width: config.topbarIconSize,
+		height: config.topbarIconSize,
+	};
 }
 
 function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, cell: CellInfo): void {
@@ -364,7 +489,7 @@ function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, c
 			// NOTE: Often ascent and descent are not equal, so we need to center the text vertically.
 			const ascentDiff = textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent;
 			textPosition.y += ascentDiff / 2;
-			r.drawText(text, textPosition, Color.TEXT);
+			r.drawText(text, textPosition, Color.CELL_TEXT);
 		}
 	} else {
 		if (cell.hovered) {
@@ -380,8 +505,6 @@ function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, c
 	// 	r.drawText(text, cell.center, '#fff');
 	// }
 }
-
-main();
 
 function initColors(): void {
 	setColors(getComputedStyle(document.documentElement));
@@ -458,7 +581,10 @@ function generateMinefield(minesweeper: Minesweeper, targetIndex: number, seed?:
 
 		matrix2SetFrom(minesweeper.solverFlags, minefield.flags);
 		matrix2SetFrom(minesweeper.originalFlags, minefield.flags);
-		if (solver.trySolve()) {
+		minefield.flags = minesweeper.solverFlags;
+		const solved = solver.trySolve();
+		minefield.flags = minesweeper.playerFlags;
+		if (solved) {
 			minesweeper.solved = true;
 			break;
 		}
@@ -686,11 +812,48 @@ function isCellRevealed(minefield: Minefield, index: number): boolean {
 function isSolved(minefield: Minefield): boolean {
 	for (let row = 0; row < minefield.rows; row++) {
 		for (let col = 0; col < minefield.cols; col++) {
-			const flag = getCellFlag(minefield, row, col);
-			if (flag === Flag.UNKNOWN) return false;
+			if (minefield.data[row][col] !== MINE && getCellFlag(minefield, row, col) !== Flag.REVEALED) {
+				return false;
+			}
 		}
 	}
 	return true;
+}
+
+function finishGameIfSolved(minesweeper: Minesweeper): boolean {
+	if (!isSolved(minesweeper.field)) return false;
+
+	for (let row = 0; row < minesweeper.field.rows; row++) {
+		for (let col = 0; col < minesweeper.field.cols; col++) {
+			if (minesweeper.field.data[row][col] === MINE) {
+				minesweeper.field.flags[row][col] = Flag.FLAGGED;
+			}
+		}
+	}
+	minesweeper.done = true;
+	minesweeper.failed = false;
+	return true;
+}
+
+function hasRevealedMine(minefield: Minefield): boolean {
+	for (let row = 0; row < minefield.rows; row++) {
+		for (let col = 0; col < minefield.cols; col++) {
+			if (minefield.data[row][col] === MINE && getCellFlag(minefield, row, col) === Flag.REVEALED) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function countFlags(minefield: Minefield): number {
+	let count = 0;
+	for (let row = 0; row < minefield.rows; row++) {
+		for (let col = 0; col < minefield.cols; col++) {
+			if (getCellFlag(minefield, row, col) === Flag.FLAGGED) count++;
+		}
+	}
+	return count;
 }
 
 function numberToColor(number: number): string {
@@ -720,6 +883,10 @@ type GameImages = {
 	flag: HTMLImageElement;
 	mine: HTMLImageElement;
 	mineExploded: HTMLImageElement;
+	clock: HTMLImageElement;
+	smiley: HTMLImageElement;
+	smileyCool: HTMLImageElement;
+	smileyDead: HTMLImageElement;
 };
 
 async function loadImages(): Promise<GameImages> {
@@ -729,11 +896,31 @@ async function loadImages(): Promise<GameImages> {
 	mineImage.src = './mine.png';
 	const mineExplodedImage = new Image();
 	mineExplodedImage.src = './mine-exploded.png';
-	await Promise.all([flagImage.decode(), mineImage.decode(), mineExplodedImage.decode()]);
+	const clockImage = new Image();
+	clockImage.src = './clock.png';
+	const smileyImage = new Image();
+	smileyImage.src = './smiley.png';
+	const smileyCoolImage = new Image();
+	smileyCoolImage.src = './smiley-cool.png';
+	const smileyDeadImage = new Image();
+	smileyDeadImage.src = './smiley-dead.png';
+	await Promise.all([
+		flagImage.decode(),
+		mineImage.decode(),
+		mineExplodedImage.decode(),
+		clockImage.decode(),
+		smileyImage.decode(),
+		smileyCoolImage.decode(),
+		smileyDeadImage.decode(),
+	]);
 	return {
 		flag: flagImage,
 		mine: mineImage,
 		mineExploded: mineExplodedImage,
+		clock: clockImage,
+		smiley: smileyImage,
+		smileyCool: smileyCoolImage,
+		smileyDead: smileyDeadImage,
 	};
 }
 
@@ -1157,3 +1344,12 @@ function matrix2SetFrom(target: number[][], source: number[][]): void {
 		}
 	}
 }
+
+function timeToHumanString(time: number): string {
+	const seconds = Math.floor(time / 1000);
+	const minutes = Math.floor(seconds / 60);
+	const remainingSeconds = seconds % 60;
+	return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
+main();

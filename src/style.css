@@ -5,7 +5,8 @@
 	--color-cell-hover: #dbd9db;
 	--color-cell-wrong: #ff6060;
 	--color-cell-exploded: #fac4c4;
-	--color-text: #242424;
+	--color-cell-text: #242424;
+	--color-text-topbar: #111111;
 	--color-number-1: #add2ff;
 	--color-number-2: #ace2ac;
 	--color-number-3: #fefeb4;
