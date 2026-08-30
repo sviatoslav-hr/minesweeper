@@ -2,6 +2,7 @@ import { isInsideRect, v2Clone, type Rect, type Vec2 } from '$math';
 import { KeyboardInput } from './input';
 import { Random } from './random';
 import { Renderer2d, type FontRendered } from './renderer';
+import { SoundManager } from './sound';
 import './style.css';
 
 /*
@@ -9,7 +10,7 @@ TODO:
 - Add a cool win animation.
 - Add a cool lose animation (some kind of explosion?).
 - Add a scoreboard.
-- Add sounds (with mute option).
+- Add a mute option.
 - Allow optionally specifying the seed for minefield generation in the URL.
 - Add a second "theme" where number color is displayed as text instead of a background.
 - PERF: Change array to be index based instead of 2d array.
@@ -69,8 +70,8 @@ const TOPBAR_HEIGHT = 0.1;
 const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
 const DEFAULT_MINE_DENSITY = 0.23;
-const DEFAULT_ROWS = 8;
-const DEFAULT_COLS = 8;
+const DEFAULT_ROWS = 16;
+const DEFAULT_COLS = 30;
 
 async function main(): Promise<void> {
 	console.log('[INFO]: Game version 0.1');
@@ -87,6 +88,8 @@ async function main(): Promise<void> {
 	// Disable context menu from appearing on right-click
 	canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
 	appElement.appendChild(canvas);
+	const sounds = new SoundManager();
+	canvas.addEventListener('pointerdown', sounds.unlock);
 	const context = canvas.getContext('2d');
 	if (!context) {
 		console.error('[ERROR]: Canvas context not supported');
@@ -140,6 +143,7 @@ async function main(): Promise<void> {
 		let config = computeConfig(canvas, minesweeper, images);
 		const smileyHovered = isInsideRect(input.getMousePosition(), getSmileyRect(config));
 		if (smileyHovered && input.isPressed('MouseLeft')) {
+			void sounds.play('click');
 			minesweeper = createMinesweeper(rows, cols);
 			globalThis.minesweeper = minesweeper;
 			config = computeConfig(canvas, minesweeper, images);
@@ -172,7 +176,7 @@ async function main(): Promise<void> {
 				try {
 					const cell = computeCell(config, minesweeper.field, row, col);
 					if (!minesweeper.done) {
-						handleCellInput(minesweeper, input, cell);
+						handleCellInput(minesweeper, input, cell, sounds);
 					}
 					drawCell(r, config, minesweeper, cell);
 					isAnyHovered ||= cell.hovered;
@@ -320,7 +324,7 @@ function computeCell(config: GameConfig, minefield: Minefield, row: number, col:
 	return cell;
 }
 
-function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: CellInfo): void {
+function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: CellInfo, sounds: SoundManager): void {
 	cell.hovered = isInsideRect(input.getMousePosition(), cell.rect);
 	if (cell.revealed && cell.value === NONE) {
 		cell.hovered = false;
@@ -331,43 +335,50 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 
 	if (minesweeper.generated && cell.hovered && !cell.revealed) {
 		if (!cell.flagged && input.isPressed('MouseLeft')) {
+			void sounds.play('click');
 			cell.revealed = true;
 			const exploded = revealCell(minesweeper.field, cell.row, cell.col);
 			if (exploded) {
 				minesweeper.done = true;
 				minesweeper.failed = true;
+				void sounds.play('lost');
 			} else {
-				finishGameIfSolved(minesweeper);
+				if (finishGameIfSolved(minesweeper)) void sounds.play('win');
 			}
 			console.debug(`Revealed cell at ${cell.row}:${cell.col}`);
 		}
 		if (input.isPressed('MouseRight')) {
 			if (!cell.flagged && countFlags(minesweeper.field) >= minesweeper.field.minesCount) return;
+			void sounds.play('click');
 			console.debug(`Flagged cell at ${cell.row}:${cell.col}`);
 			toggleCellFlag(minesweeper.field, cell.row, cell.col);
 			cell.flagged = !cell.flagged;
-			finishGameIfSolved(minesweeper);
+			if (finishGameIfSolved(minesweeper)) void sounds.play('win');
 		}
 		return;
 	}
 
 	const value = minesweeper.field.data[cell.row][cell.col];
 	if (minesweeper.generated && cell.hovered && cell.revealed && value > NONE && input.isPressed('MouseLeft')) {
-		const exploded = chordeCell(minesweeper.field, cell.row, cell.col);
+		const { changed, exploded } = chordeCell(minesweeper.field, cell.row, cell.col);
+		if (!changed) return;
+		void sounds.play('click');
 		if (exploded) {
 			minesweeper.done = true;
 			minesweeper.failed = true;
+			void sounds.play('lost');
 		} else {
-			finishGameIfSolved(minesweeper);
+			if (finishGameIfSolved(minesweeper)) void sounds.play('win');
 		}
 		return;
 	}
 
 	if (!minesweeper.generated && cell.hovered && !cell.revealed && input.isPressed('MouseLeft')) {
+		void sounds.play('click');
 		generateMinefield(minesweeper, indexOf(cell.row, cell.col, minesweeper.field.cols));
 		cell.revealed = true;
 		minesweeper.generated = true;
-		finishGameIfSolved(minesweeper);
+		if (finishGameIfSolved(minesweeper)) void sounds.play('win');
 	}
 }
 
@@ -731,10 +742,10 @@ function toggleCellFlag(minefield: Minefield, row: number, col: number): void {
  * NOTE: When a number has the correct amount of flags, you can click on the number to open all the cells around it.
  * This is called a chord because in older versions it required pressing two buttons, left + right, at the same time.
  */
-function chordeCell(minefield: Minefield, row: number, col: number): boolean {
-	if (minefield.flags[row][col] !== Flag.REVEALED) return false;
+function chordeCell(minefield: Minefield, row: number, col: number): { changed: boolean; exploded: boolean } {
+	if (minefield.flags[row][col] !== Flag.REVEALED) return { changed: false, exploded: false };
 	const value = minefield.data[row][col];
-	if (value <= NONE) return false;
+	if (value <= NONE) return { changed: false, exploded: false };
 
 	let nearFlagsCount = 0;
 	for (const [offsetRow, offsetCol] of OFFSETS) {
@@ -744,18 +755,20 @@ function chordeCell(minefield: Minefield, row: number, col: number): boolean {
 			nearFlagsCount++;
 		}
 	}
-	if (nearFlagsCount != value) return false;
+	if (nearFlagsCount != value) return { changed: false, exploded: false };
 
+	let changed = false;
 	let anyExploded = false;
 	for (const [offsetRow, offsetCol] of OFFSETS) {
 		const neighborRow = row + offsetRow;
 		const neighborCol = col + offsetCol;
 		if (minefield.flags?.[neighborRow]?.[neighborCol] === Flag.UNKNOWN) {
+			changed = true;
 			const exploded = revealCell(minefield, neighborRow, neighborCol);
 			anyExploded ||= exploded;
 		}
 	}
-	return anyExploded;
+	return { changed, exploded: anyExploded };
 }
 
 function indexOf(row: number, col: number, cols: number): number {
