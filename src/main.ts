@@ -72,6 +72,7 @@ const CELL_RADIUS = 4;
 const DEFAULT_MINE_DENSITY = 0.21;
 const DEFAULT_ROWS = 16;
 const DEFAULT_COLS = 30;
+const DEV = new URL(location.href).hostname === 'localhost';
 
 async function main(): Promise<void> {
 	console.log('[INFO]: Game version 0.1');
@@ -148,7 +149,7 @@ async function main(): Promise<void> {
 			globalThis.minesweeper = minesweeper;
 			config = computeConfig(canvas, minesweeper, images);
 		}
-		config.debugReveal = input.isDown('Space');
+		config.debugReveal = DEV && input.isDown('Space');
 
 		if (minesweeper?.generated && !minesweeper.done) {
 			minesweeper.time += deltaTime;
@@ -331,7 +332,7 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 	}
 	// TODO: Instead of always have this as a shortcut, have a button that activates "hint" mode
 	//       and display the amount of hints used in a game to make player conscious of using them.
-	cell.hinted = cell.hovered && input.isDown('KeyH');
+	cell.hinted = DEV && cell.hovered && input.isDown('KeyH');
 
 	if (minesweeper.generated && cell.hovered && !cell.revealed) {
 		if (!cell.flagged && input.isPressed('MouseLeft')) {
