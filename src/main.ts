@@ -95,14 +95,13 @@ async function main(): Promise<void> {
 
 	const savedMinesweeper = storage.getItem('minesweeper');
 	if (savedMinesweeper) {
-		const saved = JSON.parse(savedMinesweeper) as Minesweeper;
-		saved.time = Number.isFinite(saved.time) ? saved.time : 0;
-		saved.failed ??= hasRevealedMine(saved.field);
-		saved.playerFlags = saved.field.flags;
-		if (saved.generated && !saved.done && !saved.failed) {
-			finishGameIfSolved(saved);
+		try {
+			const saved = JSON.parse(savedMinesweeper) as Minesweeper;
+			saved.playerFlags = saved.field.flags;
+			globalThis.minesweeper = saved;
+		} catch (e) {
+			console.error('[ERROR]: Failed to parse saved minesweeper', e);
 		}
-		globalThis.minesweeper = saved;
 	}
 
 	const images = await loadImages();
@@ -833,17 +832,6 @@ function finishGameIfSolved(minesweeper: Minesweeper): boolean {
 	minesweeper.done = true;
 	minesweeper.failed = false;
 	return true;
-}
-
-function hasRevealedMine(minefield: Minefield): boolean {
-	for (let row = 0; row < minefield.rows; row++) {
-		for (let col = 0; col < minefield.cols; col++) {
-			if (minefield.data[row][col] === MINE && getCellFlag(minefield, row, col) === Flag.REVEALED) {
-				return true;
-			}
-		}
-	}
-	return false;
 }
 
 function countFlags(minefield: Minefield): number {
