@@ -125,8 +125,6 @@ async function main(): Promise<void> {
 	const rows = DEFAULT_ROWS;
 	const cols = DEFAULT_COLS;
 
-	let showSolverFlags = false;
-
 	let lastTime = performance.now();
 	const tick = (time: number) => {
 		const deltaTime = time - lastTime;
@@ -163,18 +161,6 @@ async function main(): Promise<void> {
 			};
 		}
 
-		if (input.isPressed('KeyS')) {
-			showSolverFlags = !showSolverFlags;
-		}
-		minesweeper.field.flags = showSolverFlags ? minesweeper.solverFlags : minesweeper.playerFlags;
-
-		if (input.isPressed('KeyE')) {
-			Solver.trySolve(minesweeper);
-		}
-		if (input.isPressed('KeyQ')) {
-			Solver.resetFlags(minesweeper);
-		}
-
 		drawTopbar(r, minesweeper, config, images);
 
 		r.setFont(config.cellFont);
@@ -191,9 +177,7 @@ async function main(): Promise<void> {
 					drawCell(r, config, minesweeper, cell);
 					isAnyHovered ||= cell.hovered;
 				} catch (e) {
-					console.error(e);
-					// debugger;
-					// throw e;
+					console.error(`[ERROR]: Failed to compute cell [${row};${col}]`, e);
 				}
 			}
 		}
