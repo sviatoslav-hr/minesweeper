@@ -65,11 +65,11 @@ type Minefield = {
 };
 
 const PADDING_WINDOW = 0.01;
-const PADDING_CELL = 0.1;
+const PADDING_CELL = 0.07;
 const TOPBAR_HEIGHT = 0.1;
 const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
-const DEFAULT_MINE_DENSITY = 0.23;
+const DEFAULT_MINE_DENSITY = 0.21;
 const DEFAULT_ROWS = 16;
 const DEFAULT_COLS = 30;
 
@@ -559,9 +559,17 @@ function generateMinefield(minesweeper: Minesweeper, targetIndex: number, seed?:
 	minefield.minesCount = minesweeper.expectedMinesCount;
 	let attempt = 0;
 	let startTime = performance.now();
-	const solver = new Solver(minesweeper.field, minesweeper.expectedMinesCount);
+	const solver = new Solver(minesweeper.field);
 	for (; attempt < MAX_GENERATION_ATTEMPTS; attempt++) {
 		if (attempt % 5 === 0) {
+			if (attempt >= 50) {
+				minesweeper.expectedMinesCount -= 1;
+				const minMinesCount = Math.round(rows * cols * 0.15);
+				if (minesweeper.expectedMinesCount < minMinesCount) {
+					minesweeper.expectedMinesCount = minMinesCount;
+				}
+			}
+			minefield.minesCount = minesweeper.expectedMinesCount;
 			matrix2Fill(minefield.data, NONE);
 			placeMinefieldMines(minefield, targetIndex, random);
 		} else {
@@ -941,29 +949,17 @@ function isConstraintEmpty(constraint: Constraint): boolean {
 
 class Solver {
 	minefield: Minefield;
-	minesCount: number;
 	constraints: Constraint[] = [];
 	todoConstraints: Constraint[] = [];
 	todoKnownCells: number[] = [];
 	changed = false;
 
-	constructor(minefield: Minefield, minesCount: number) {
+	constructor(minefield: Minefield) {
 		this.minefield = minefield;
-		this.minesCount = minesCount;
 	}
 
-	static trySolve(minesweeper: Minesweeper): boolean {
-		const { field: minefield, solverFlags } = minesweeper;
-		const prevFlags = minesweeper.field.flags;
-		minefield.flags = solverFlags;
-		const solver = new Solver(minesweeper.field, minesweeper.expectedMinesCount);
-		minesweeper.solved = solver.trySolve();
-		minefield.flags = prevFlags;
-		return minesweeper.solved;
-	}
-
-	static resetFlags(minesweeper: Minesweeper): void {
-		minesweeper.solverFlags = minesweeper.originalFlags.map((r) => r.slice());
+	get minesCount(): number {
+		return this.minefield.minesCount;
 	}
 
 	reset(): void {
