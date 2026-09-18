@@ -80,7 +80,7 @@ const PADDING_CELL = 0.07;
 const TOPBAR_HEIGHT = 0.07;
 const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
-const DEFAULT_MINE_DENSITY = 0.3;
+const DEFAULT_MINE_DENSITY = 0.21;
 const DEFAULT_ROWS = 16;
 const DEFAULT_COLS = 30;
 const DEV = new URL(location.href).hostname === 'localhost';
@@ -114,12 +114,6 @@ async function main(): Promise<void> {
 			const saved = JSON.parse(savedMinesweeper) as Minesweeper;
 			saved.playerFlags = saved.field.flags;
 			globalThis.minesweeper = saved;
-			const f = globalThis.minesweeper.field;
-			for (const n of neighborIndices(f, indexOf(1, 1, f.cols))) {
-				globalThis.minesweeper.field.data[rowOf(n, f.cols)][colOf(n, f.cols)] = -1;
-			}
-			f.data[1][1] = 8;
-			f.data[2][3] = 7;
 		} catch (e) {
 			console.error('[ERROR]: Failed to parse saved minesweeper', e);
 		}
