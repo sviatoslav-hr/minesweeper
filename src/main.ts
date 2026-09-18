@@ -29,14 +29,22 @@ const Color = {
 	CELL_EXPLODED: '--color-cell-exploded',
 	CELL_TEXT: '--color-cell-text',
 	TEXT_TOPBAR: '--color-text-topbar',
-	NUMBER1: '--color-number-1',
-	NUMBER2: '--color-number-2',
-	NUMBER3: '--color-number-3',
-	NUMBER4: '--color-number-4',
-	NUMBER5: '--color-number-5',
-	NUMBER6: '--color-number-6',
-	NUMBER7: '--color-number-7',
-	NUMBER8: '--color-number-8',
+	NUMBER1_BG: '--color-number-1-bg',
+	NUMBER2_BG: '--color-number-2-bg',
+	NUMBER3_BG: '--color-number-3-bg',
+	NUMBER4_BG: '--color-number-4-bg',
+	NUMBER5_BG: '--color-number-5-bg',
+	NUMBER6_BG: '--color-number-6-bg',
+	NUMBER7_BG: '--color-number-7-bg',
+	NUMBER8_BG: '--color-number-8-bg',
+	NUMBER1_FG: '--color-number-1-fg',
+	NUMBER2_FG: '--color-number-2-fg',
+	NUMBER3_FG: '--color-number-3-fg',
+	NUMBER4_FG: '--color-number-4-fg',
+	NUMBER5_FG: '--color-number-5-fg',
+	NUMBER6_FG: '--color-number-6-fg',
+	NUMBER7_FG: '--color-number-7-fg',
+	NUMBER8_FG: '--color-number-8-fg',
 };
 const ColorVar = {
 	...Color,
@@ -72,7 +80,7 @@ const PADDING_CELL = 0.07;
 const TOPBAR_HEIGHT = 0.07;
 const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
-const DEFAULT_MINE_DENSITY = 0.21;
+const DEFAULT_MINE_DENSITY = 0.3;
 const DEFAULT_ROWS = 16;
 const DEFAULT_COLS = 30;
 const DEV = new URL(location.href).hostname === 'localhost';
@@ -106,6 +114,12 @@ async function main(): Promise<void> {
 			const saved = JSON.parse(savedMinesweeper) as Minesweeper;
 			saved.playerFlags = saved.field.flags;
 			globalThis.minesweeper = saved;
+			const f = globalThis.minesweeper.field;
+			for (const n of neighborIndices(f, indexOf(1, 1, f.cols))) {
+				globalThis.minesweeper.field.data[rowOf(n, f.cols)][colOf(n, f.cols)] = -1;
+			}
+			f.data[1][1] = 8;
+			f.data[2][3] = 7;
 		} catch (e) {
 			console.error('[ERROR]: Failed to parse saved minesweeper', e);
 		}
@@ -160,6 +174,7 @@ async function main(): Promise<void> {
 
 		let isAnyHovered = smileyHovered;
 		if (minesweeper.done && input.isPressed('KeyP')) {
+			// FIXME: This Keeps mines revealed for some reason, maybe related to generation of 'originalFlags'
 			globalThis.minesweeper = {
 				...minesweeper,
 				done: false,
@@ -482,7 +497,7 @@ function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, c
 		if (value === NONE) {
 			r.drawRectRounded(cell.rect, CELL_RADIUS, Color.CELL_EMPTY);
 		} else {
-			cellColor = numberToColor(value);
+			cellColor = numberToBackgroundColor(value);
 			r.drawRectRounded(cell.rect, CELL_RADIUS, cellColor);
 			const text = String(value);
 			const textPosition = v2Clone(cell.center);
@@ -490,7 +505,8 @@ function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, c
 			// NOTE: Often ascent and descent are not equal, so we need to center the text vertically.
 			const ascentDiff = textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent;
 			textPosition.y += ascentDiff / 2;
-			r.drawText(text, textPosition, Color.CELL_TEXT);
+			const textColor = numberToForegroundColor(value);
+			r.drawText(text, textPosition, textColor);
 		}
 	} else {
 		if (cell.hovered) {
@@ -856,26 +872,49 @@ function countFlags(minefield: Minefield): number {
 	return count;
 }
 
-function numberToColor(number: number): string {
+function numberToBackgroundColor(number: number): string {
 	switch (number) {
 		case 1:
-			return Color.NUMBER1;
+			return Color.NUMBER1_BG;
 		case 2:
-			return Color.NUMBER2;
+			return Color.NUMBER2_BG;
 		case 3:
-			return Color.NUMBER3;
+			return Color.NUMBER3_BG;
 		case 4:
-			return Color.NUMBER4;
+			return Color.NUMBER4_BG;
 		case 5:
-			return Color.NUMBER5;
+			return Color.NUMBER5_BG;
 		case 6:
-			return Color.NUMBER6;
+			return Color.NUMBER6_BG;
 		case 7:
-			return Color.NUMBER7;
+			return Color.NUMBER7_BG;
 		case 8:
-			return Color.NUMBER8;
+			return Color.NUMBER8_BG;
 		default:
-			return Color.NUMBER1;
+			return Color.NUMBER1_BG;
+	}
+}
+
+function numberToForegroundColor(number: number): string {
+	switch (number) {
+		case 1:
+			return Color.NUMBER1_FG;
+		case 2:
+			return Color.NUMBER2_FG;
+		case 3:
+			return Color.NUMBER3_FG;
+		case 4:
+			return Color.NUMBER4_FG;
+		case 5:
+			return Color.NUMBER5_FG;
+		case 6:
+			return Color.NUMBER6_FG;
+		case 7:
+			return Color.NUMBER7_FG;
+		case 8:
+			return Color.NUMBER8_FG;
+		default:
+			return Color.NUMBER1_FG;
 	}
 }
 

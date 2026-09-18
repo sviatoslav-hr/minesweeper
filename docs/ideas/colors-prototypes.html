@@ -1,0 +1,215 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Colors</title>
+	</head>
+	<style>
+		body {
+			background-color: #302d30;
+		}
+		.row {
+			padding: 2px;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			width: fit-content;
+		}
+		.column {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			padding-bottom: 400px;
+		}
+		.block {
+			width: 100px;
+			height: 100px;
+			background-color: var(--color);
+		}
+		.column.pressed:hover > * {
+			opacity: 0;
+		}
+		.column.pressed:hover > *:hover {
+			opacity: 1;
+		}
+	</style>
+	<body class="column"></body>
+	<script>
+		const colors = ["#ACD1FF", "#ABE1AB", "#FEFEB3", "#F2C198", "#EFA2A2"];
+		const groups = [];
+		groups.push(colors.concat(withMiddle("#e19ac7", "#a782d4")));
+		groups.push(colors.concat(withMiddle("#e19ac7", "#A575E0")));
+		groups.push(colors.concat(withMiddle("#E691C7", "#A575E0")));
+		groups.push(colors.concat(withMiddle("#E691C7", "#A478D9")));
+		groups.push(colors.concat(withMiddle("#E98FC8", "#a782d4")));
+		groups.push(colors.concat(withMiddle("#e099c6", "#a782d4")));
+
+		groups.push([
+			"#abd0ff",
+			"#b7e3a5",
+			"#fefeb3",
+			"#ffcda1",
+			"#efa2a2",
+			"#ce93d8",
+			"#a78dd4",
+			add("#a78dd4", sub("#ce93d8", "#a78dd4")),
+			// mix("#e099c6", "#b2ebf2", 0.5),
+		]);
+		groups.push(["#abd0ff", "#b7e3a5", "#fefeb3", "#ffcda1", "#efa2a2", "#aa9bd7", "#74C9C2", "#7675ac"]);
+		groups.push(["#abd0ff", "#b7e3a5", "#fefeb3", "#ffcda1", "#efa2a2", "#d89ecf", "#aa9bd7", "#7675ac"]);
+		groups.push(["#abd0ff", "#b7e3a5", "#fefeb3", "#ffcda1", "#efa2a2", "#d89ecf", "#aa9bd7", "#7675ac"]);
+		groups.push([
+			...colors.slice(0, 1),
+			mix("#AAE0AA", "#C5E7A2"),
+			...colors.slice(2, 3),
+			"#FFCDA1",
+			...colors.slice(4),
+			...withMiddle("#e099c6", "#a782d4"),
+		]);
+		groups.push([
+			...colors.slice(0, 1),
+			mix("#AAE0AA", "#C5E7A2"),
+			...colors.slice(2, 3),
+			"#FFCDA1",
+			"#efa2a2",
+			mix(mix("#efa2a2", "#d390c9"), "#d390c9"), // #d390c9
+			"#aa9bd7",
+			// middleColor("#575b75", middleColor("#aa9bd7", "#abd0ff")),
+			// mix(mix("#606280", "#abd0ff", 0.3), "#aa9bd7", 0.3),
+			"#7675ac",
+		]);
+		groups.push([
+			...colors.slice(0, 1),
+			"#C6E8A3",
+			...colors.slice(2, 3),
+			"#FFCDA1",
+			...colors.slice(4),
+			...withMiddle("#e099c6", "#a782d4"),
+		]);
+		groups.push([
+			"#B4F1F5",
+			"#C6E8A3",
+			...colors.slice(2, 3),
+			"#FFCDA1",
+			...colors.slice(4),
+			...withMiddle("#e099c6", "#a782d4"),
+		]);
+		groups.push([
+			"#A5DDD8",
+			"#C6E8A3",
+			...colors.slice(2, 3),
+			"#FFCDA1",
+			...colors.slice(4),
+			...withMiddle("#e099c6", "#a782d4"),
+		]);
+
+		groups.push([...colors.slice(0, 1), "#C6E8A3", ...colors.slice(2), ...withMiddle("#e099c6", "#a782d4")]);
+		groups.push([...colors.slice(0, 1), "#D4EFAE", ...colors.slice(2), ...withMiddle("#e099c6", "#a782d4")]);
+
+		groups.push(withMiddle("#ACD1FF", "#ABE1AB").concat(colors.slice(2).concat(["#E98FC8", "#a782d4"])));
+		groups.push(["#ACD1FF", "#A5DDD8", "#ABE1AB", ...colors.slice(2).concat(["#E98FC8", "#a782d4"])]);
+		groups.push([
+			"#ACD1FF",
+			...withMiddle("#ABE1AB", "#FEFEB3"),
+			...colors.slice(3).concat(["#E98FC8", "#a782d4"]),
+		]);
+		groups.push([
+			"#ACD1FF",
+			...withMiddle("#ABE1AB", "#FEFEB3"),
+			...withMiddle("#FEFEB3", "#EFA2A2").slice(1),
+			...["#E98FC8", "#a782d4"],
+		]);
+		groups.push([
+			"#ACD1FF",
+			...withMiddle("#ABE1AB", "#FEFEB3"),
+			...["#FFCEA2", "#EFA2A2"],
+			...["#E98FC8", "#a782d4"],
+		]);
+		groups.push([
+			"#ACD1FF",
+			...withMiddle("#ABE1AB", "#FEFEB3"),
+			...["#FFCEA2"],
+			...withMiddle("#EFA2A2", "#a782d4"),
+		]);
+		groups.push([
+			"#ACD1FF",
+			...withMiddle("#ABE1AB", "#FEFEB3"),
+			...["#FFCEA2"],
+			...withMiddle("#EFA2A2", "#A684CF"),
+		]);
+		groups.push([
+			"#ACD1FF",
+			...withMiddle("#ABE1AB", "#FEFEB3"),
+			...["#FFCEA2"],
+			...["#EFA2A2", "#D08ABD", "#a782d4"],
+		]);
+		groups.push([
+			"#ACD1FF",
+			...withMiddle("#ABE1AB", "#FEFEB3"),
+			...["#FFCEA2"],
+			...["#EFA2A2", "#D08ABD", "#a782d4"],
+		]);
+		groups.push([
+			"#add2ff",
+			...withMiddle("#ace2ac", "#fefeb4"),
+			...["#f2c299"],
+			...["#f0a3a3", "#D08ABD", "#a782d4"],
+		]);
+		for (const groupColors of groups) {
+			document.body.append(createColorPaletteElement(groupColors));
+		}
+
+		document.body.addEventListener("mousedown", () => {
+			document.body.classList.add("pressed");
+		});
+		document.body.addEventListener("mouseup", () => {
+			document.body.classList.remove("pressed");
+		});
+
+		function createColorPaletteElement(colors) {
+			const palette = document.createElement("div");
+			palette.children;
+			palette.classList.add("row");
+			palette.append(...colors.map(createColorElement));
+			return palette;
+		}
+
+		function createColorElement(color) {
+			const block = document.createElement("div");
+			block.classList.add("block");
+			block.style.setProperty("--color", color);
+			return block;
+		}
+
+		function withMiddle(color1, color2) {
+			const middle = mix(color1, color2);
+			return [color1, middle, color2];
+		}
+
+		function mix(color1, color2, weight = 0.5) {
+			weight = Math.max(0, Math.min(1, weight));
+			const [r1, g1, b1] = toRgb(color1);
+			const [r2, g2, b2] = toRgb(color2);
+			const w1 = 1 - weight;
+			const w2 = weight;
+			return `#${toHex(r1 * w1 + r2 * w2)}${toHex(g1 * w1 + g2 * w2)}${toHex(b1 * w1 + b2 * w2)}`;
+		}
+		function sub(color1, color2) {
+			const [r1, g1, b1] = toRgb(color1);
+			const [r2, g2, b2] = toRgb(color2);
+			return `#${toHex(r1 - r2)}${toHex(g1 - g2)}${toHex(b1 - b2)}`;
+		}
+		function add(color1, color2) {
+			const [r1, g1, b1] = toRgb(color1);
+			const [r2, g2, b2] = toRgb(color2);
+			return `#${toHex(r1 + r2)}${toHex(g1 + g2)}${toHex(b1 + b2)}`;
+		}
+		function toRgb(hex) {
+			hex = hex.replace("#", "");
+			return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+		}
+		function toHex(n) {
+			return Math.round(n).toString(16).padStart(2, "0");
+		}
+	</script>
+</html>

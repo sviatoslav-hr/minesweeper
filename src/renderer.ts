@@ -98,6 +98,17 @@ export class Renderer2d {
 		this.context.fill();
 	}
 
+	drawRectOutlineRounded(rect: Rect, radius: number, color: string, lineWidth = 1): void {
+		this.context.strokeStyle = color;
+		this.context.lineWidth = lineWidth;
+		if (this.camera) {
+			rect = this.camera.toScreenRect(rect);
+		}
+		this.context.beginPath();
+		this.context.roundRect(rect.x, rect.y, rect.width, rect.height, radius);
+		this.context.stroke();
+	}
+
 	drawRectOutline(rect: Rect, color: string, lineWidth = 1): void {
 		this.context.strokeStyle = color;
 		this.context.lineWidth = lineWidth;

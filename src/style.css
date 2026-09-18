@@ -7,14 +7,23 @@
 	--color-cell-exploded: #fac4c4;
 	--color-cell-text: #242424;
 	--color-text-topbar: #111111;
-	--color-number-1: #add2ff;
-	--color-number-2: #ace2ac;
-	--color-number-3: #fefeb4;
-	--color-number-4: #f2c299;
-	--color-number-5: #f0a3a3;
-	--color-number-6: #b2fbfe;
-	--color-number-7: #f3a8f3;
-	--color-number-8: #cd86ed;
+
+	--color-number-1-bg: #abd0ff;
+	--color-number-2-bg: #b7e3a5;
+	--color-number-3-bg: #fefeb3;
+	--color-number-4-bg: #ffcda1;
+	--color-number-5-bg: #efa2a2;
+	--color-number-6-bg: #e98fc8;
+	--color-number-7-bg: #c484cf;
+	--color-number-8-bg: #a782d4;
+	--color-number-1-fg: #242424;
+	--color-number-2-fg: #242424;
+	--color-number-3-fg: #242424;
+	--color-number-4-fg: #242424;
+	--color-number-5-fg: #242424;
+	--color-number-6-fg: #242424;
+	--color-number-7-fg: #242424;
+	--color-number-8-fg: #242424;
 }
 
 * {
