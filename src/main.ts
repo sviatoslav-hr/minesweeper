@@ -203,6 +203,10 @@ async function main(): Promise<void> {
 			}
 		}
 
+		if (!minesweeper.generated) {
+			drawStartText(r, config);
+		}
+
 		// PERF: Check if its fine to be constantly updating the style.
 		if (isAnyHovered) {
 			document.body.style.cursor = 'pointer';
@@ -242,6 +246,7 @@ type GameConfig = {
 	gridHeight: number;
 	gridXOffset: number;
 	gridYOffset: number;
+	startFont: FontRendered;
 	topbarYOffset: number;
 	topbarHeight: number;
 	topbarGap: number;
@@ -280,6 +285,8 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 	const gridXOffset = (canvas.width - gridWidth) / 2;
 	const gridYOffset = topbarYOffset + topbarHeight + outerPadding;
 
+	const startFont: FontRendered = { size: gridHeight * 0.15, weight: 700, family: 'Arial' };
+
 	return {
 		cellSize,
 		cellPadding,
@@ -294,6 +301,7 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 		topbarIconY,
 		topbarIconSize,
 		topbarFont,
+		startFont,
 		images,
 		textBaseline: 'middle',
 		textAlign: 'center',
@@ -405,14 +413,22 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 	}
 }
 
+function drawStartText(r: Renderer2d, config: GameConfig) {
+	r.setFont(config.startFont);
+	const text = 'CLICK TO START';
+	let m = r.measureText(text);
+	let textY = config.gridYOffset + config.gridHeight / 2;
+	let x = config.gridXOffset + config.gridWidth / 2;
+	const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
+	textY += ascentDiff / 2;
+	r.context.globalAlpha = 0.5;
+	r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
+	r.context.globalAlpha = 1;
+}
+
 function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig, images: GameImages) {
 	r.context.textBaseline = config.textBaseline;
 	r.context.textAlign = config.textAlign;
-	// r.drawRectRounded(
-	// 	{ x: config.gridXOffset, y: config.topbarYOffset, width: config.gridWidth, height: config.topbarHeight },
-	// 	TOPBAR_RADIUS,
-	// 	Color.CELL_EMPTY,
-	// );
 	const topbarYCenter = config.topbarYOffset + config.topbarHeight / 2;
 	const paddingX = config.topbarHeight * 0.1;
 	const time = minesweeper.generated ? minesweeper.time : 0;
@@ -421,31 +437,33 @@ function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig,
 		: minesweeper.expectedMinesCount;
 	r.setFont(config.topbarFont);
 	const smileyBlockRect = getSmileyBlockRect(config);
-	{
-		// clock
-		r.drawRectRounded(
-			{
-				x: config.gridXOffset,
-				y: config.topbarYOffset,
-				width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
-				height: config.topbarHeight,
-			},
-			TOPBAR_RADIUS,
-			Color.TIME_BG,
-		);
+
+	// clock
+	r.drawRectRounded(
+		{
+			x: config.gridXOffset,
+			y: config.topbarYOffset,
+			width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
+			height: config.topbarHeight,
+		},
+		TOPBAR_RADIUS,
+		Color.TIME_BG,
+	);
+	if (time > 0) {
 		let x = config.gridXOffset + paddingX;
 		r.drawImage(images.clock, x, config.topbarIconY, config.topbarIconSize, config.topbarIconSize);
 		x += config.topbarIconSize + paddingX;
-		let text = timeToHumanString(time);
-		let m = r.measureText(text);
-		let textY = topbarYCenter;
 		{
+			let text = timeToHumanString(time);
+			let m = r.measureText(text);
+			let textY = topbarYCenter;
 			x += m.width / 2;
 			const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
 			textY += ascentDiff / 2;
 			r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
 		}
 	}
+
 	{
 		// smiley
 		let image: HTMLImageElement | undefined;
@@ -458,18 +476,19 @@ function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig,
 		const smileyIconRect = getSmileyIconRect(config);
 		r.drawImage(image, smileyIconRect.x, smileyIconRect.y, smileyIconRect.width, smileyIconRect.height);
 	}
-	{
-		// mines
-		r.drawRectRounded(
-			{
-				x: smileyBlockRect.x + smileyBlockRect.width + config.topbarGap,
-				y: config.topbarYOffset,
-				width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
-				height: config.topbarHeight,
-			},
-			TOPBAR_RADIUS,
-			Color.MINES_BG,
-		);
+
+	// mines
+	r.drawRectRounded(
+		{
+			x: smileyBlockRect.x + smileyBlockRect.width + config.topbarGap,
+			y: config.topbarYOffset,
+			width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
+			height: config.topbarHeight,
+		},
+		TOPBAR_RADIUS,
+		Color.MINES_BG,
+	);
+	if (minesweeper.generated) {
 		// Start from the right edge of the grid
 		let x = config.gridXOffset + config.gridWidth;
 		{
@@ -477,14 +496,16 @@ function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig,
 			x -= paddingX;
 			r.drawImage(images.mine, x, config.topbarIconY, config.topbarIconSize, config.topbarIconSize);
 		}
-		const text = minesRemaining.toString().padStart(3, '0');
-		const m = r.measureText(text);
-		let textY = topbarYCenter;
 		{
-			x -= paddingX + m.width / 2;
-			const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
-			textY += ascentDiff / 2;
-			r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
+			const text = minesRemaining.toString().padStart(3, '0');
+			const m = r.measureText(text);
+			let textY = topbarYCenter;
+			{
+				x -= paddingX + m.width / 2;
+				const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
+				textY += ascentDiff / 2;
+				r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
+			}
 		}
 	}
 }
@@ -1409,10 +1430,11 @@ function matrix2SetFrom(target: number[][], source: number[][]): void {
 }
 
 function timeToHumanString(time: number): string {
-	const seconds = Math.floor(time / 1000);
+	const seconds = Math.ceil(time / 1000); // NOTE: ceil not avoid showing 0 seconds.
 	const minutes = Math.floor(seconds / 60);
 	const remainingSeconds = seconds % 60;
-	return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+	if (minutes === 0) return `${remainingSeconds}s`;
+	return `${minutes}m ${remainingSeconds}s`;
 }
 
 main();
