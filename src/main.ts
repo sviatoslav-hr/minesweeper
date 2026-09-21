@@ -28,6 +28,9 @@ const Color = {
 	CELL_WRONG: '--color-cell-wrong',
 	CELL_EXPLODED: '--color-cell-exploded',
 	CELL_TEXT: '--color-cell-text',
+	TIME_BG: '--color-time-bg',
+	MINES_BG: '--color-mines-bg',
+	SMILEY_BG: '--color-smiley-bg',
 	TEXT_TOPBAR: '--color-text-topbar',
 	NUMBER1_BG: '--color-number-1-bg',
 	NUMBER2_BG: '--color-number-2-bg',
@@ -122,6 +125,7 @@ async function main(): Promise<void> {
 	const images = await loadImages();
 
 	const r = new Renderer2d(context);
+	r.context.imageSmoothingEnabled = false;
 	r.resizeCanvas(window.innerWidth, window.innerHeight);
 
 	window.addEventListener('resize', () => {
@@ -153,7 +157,7 @@ async function main(): Promise<void> {
 		r.fillScreen(Color.BACKGROUND);
 
 		let config = computeConfig(canvas, minesweeper, images);
-		const smileyHovered = isInsideRect(input.getMousePosition(), getSmileyRect(config));
+		const smileyHovered = isInsideRect(input.getMousePosition(), getSmileyBlockRect(config));
 		if (smileyHovered && input.isPressed('MouseLeft')) {
 			void sounds.play('click');
 			minesweeper = createMinesweeper(rows, cols);
@@ -240,6 +244,7 @@ type GameConfig = {
 	gridYOffset: number;
 	topbarYOffset: number;
 	topbarHeight: number;
+	topbarGap: number;
 	topbarIconY: number;
 	topbarIconSize: number;
 	topbarFont: FontRendered;
@@ -255,6 +260,7 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 	const outerPadding = shortestCanvasSide * PADDING_CANVAS;
 
 	const topbarHeight = shortestCanvasSide * TOPBAR_HEIGHT;
+	const topbarGap = outerPadding;
 	const topbarYOffset = outerPadding;
 	const topbarFont: FontRendered = { size: topbarHeight * 0.8, weight: 700, family: 'Arial' };
 	const topbarIconSize = topbarHeight * 0.8;
@@ -284,6 +290,7 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 		gridYOffset,
 		topbarYOffset,
 		topbarHeight,
+		topbarGap,
 		topbarIconY,
 		topbarIconSize,
 		topbarFont,
@@ -401,11 +408,11 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig, images: GameImages) {
 	r.context.textBaseline = config.textBaseline;
 	r.context.textAlign = config.textAlign;
-	r.drawRectRounded(
-		{ x: config.gridXOffset, y: config.topbarYOffset, width: config.gridWidth, height: config.topbarHeight },
-		TOPBAR_RADIUS,
-		Color.CELL_EMPTY,
-	);
+	// r.drawRectRounded(
+	// 	{ x: config.gridXOffset, y: config.topbarYOffset, width: config.gridWidth, height: config.topbarHeight },
+	// 	TOPBAR_RADIUS,
+	// 	Color.CELL_EMPTY,
+	// );
 	const topbarYCenter = config.topbarYOffset + config.topbarHeight / 2;
 	const paddingX = config.topbarHeight * 0.1;
 	const time = minesweeper.generated ? minesweeper.time : 0;
@@ -413,7 +420,19 @@ function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig,
 		? Math.max(0, minesweeper.field.minesCount - countFlags(minesweeper.field))
 		: minesweeper.expectedMinesCount;
 	r.setFont(config.topbarFont);
+	const smileyBlockRect = getSmileyBlockRect(config);
 	{
+		// clock
+		r.drawRectRounded(
+			{
+				x: config.gridXOffset,
+				y: config.topbarYOffset,
+				width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
+				height: config.topbarHeight,
+			},
+			TOPBAR_RADIUS,
+			Color.TIME_BG,
+		);
 		let x = config.gridXOffset + paddingX;
 		r.drawImage(images.clock, x, config.topbarIconY, config.topbarIconSize, config.topbarIconSize);
 		x += config.topbarIconSize + paddingX;
@@ -428,16 +447,29 @@ function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig,
 		}
 	}
 	{
+		// smiley
 		let image: HTMLImageElement | undefined;
 		if (minesweeper.generated && minesweeper.done) {
 			image = minesweeper.failed ? images.smileyDead : images.smileyCool;
 		} else {
 			image = images.smiley;
 		}
-		const smileyRect = getSmileyRect(config);
-		r.drawImage(image, smileyRect.x, smileyRect.y, smileyRect.width, smileyRect.height);
+		r.drawRectRounded(smileyBlockRect, TOPBAR_RADIUS, Color.SMILEY_BG);
+		const smileyIconRect = getSmileyIconRect(config);
+		r.drawImage(image, smileyIconRect.x, smileyIconRect.y, smileyIconRect.width, smileyIconRect.height);
 	}
 	{
+		// mines
+		r.drawRectRounded(
+			{
+				x: smileyBlockRect.x + smileyBlockRect.width + config.topbarGap,
+				y: config.topbarYOffset,
+				width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
+				height: config.topbarHeight,
+			},
+			TOPBAR_RADIUS,
+			Color.MINES_BG,
+		);
 		// Start from the right edge of the grid
 		let x = config.gridXOffset + config.gridWidth;
 		{
@@ -457,12 +489,22 @@ function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig,
 	}
 }
 
-function getSmileyRect(config: GameConfig): Rect {
+function getSmileyIconRect(config: GameConfig): Rect {
 	return {
 		x: config.gridXOffset + config.gridWidth / 2 - config.topbarIconSize / 2,
 		y: config.topbarYOffset + config.topbarHeight / 2 - config.topbarIconSize / 2,
 		width: config.topbarIconSize,
 		height: config.topbarIconSize,
+	};
+}
+
+function getSmileyBlockRect(config: GameConfig): Rect {
+	const size = config.topbarHeight;
+	return {
+		x: config.gridXOffset + config.gridWidth / 2 - size / 2,
+		y: config.topbarYOffset + config.topbarHeight / 2 - size / 2,
+		width: size,
+		height: size,
 	};
 }
 
