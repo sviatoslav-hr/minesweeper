@@ -84,7 +84,7 @@ const PADDING_CELL = 0.07;
 const TOPBAR_HEIGHT = 0.07;
 const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
-const DEFAULT_MINE_DENSITY = 0.21;
+const DEFAULT_MINE_DENSITY = 0.25;
 const DEFAULT_ROWS = 16;
 const DEFAULT_COLS = 30;
 const DEV = new URL(location.href).hostname === 'localhost';
