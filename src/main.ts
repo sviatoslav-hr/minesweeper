@@ -7,7 +7,6 @@ import './style.css';
 
 /*
 TODO:
-- Add pause button (and key) that hides the minefield until unpaused.
 - Add a mute button (and key).
 - Add a scoreboard.
 - Add multiple presets with different minefield sizes and difficulty levels.
@@ -68,6 +67,8 @@ type Minesweeper = {
 	done: boolean;
 	failed: boolean;
 	time: number;
+	paused: boolean;
+	flagMode: boolean;
 };
 
 type Minefield = {
@@ -116,6 +117,8 @@ async function main(): Promise<void> {
 		try {
 			const saved = JSON.parse(savedMinesweeper) as Minesweeper;
 			saved.playerFlags = saved.field.flags;
+			saved.paused = false;
+			saved.flagMode ??= false; // Initialize for backwards compatibility when this field didn't exist.
 			globalThis.minesweeper = saved;
 		} catch (e) {
 			console.error('[ERROR]: Failed to parse saved minesweeper', e);
@@ -149,28 +152,61 @@ async function main(): Promise<void> {
 		const deltaTime = time - lastTime;
 		lastTime = time;
 
-		if (!globalThis.minesweeper || input.isPressed('KeyR')) {
+		if (!globalThis.minesweeper) {
 			globalThis.minesweeper = createMinesweeper(rows, cols);
 		}
 		let minesweeper = globalThis.minesweeper;
+		if (input.isPressed('KeyR')) {
+			resetMinesweeper(minesweeper, rows, cols);
+		}
 
 		r.fillScreen(Color.BACKGROUND);
 
 		let config = computeConfig(canvas, minesweeper, images);
-		const smileyHovered = isInsideRect(input.getMousePosition(), getSmileyBlockRect(config));
+		const smileyHovered =
+			minesweeper.generated && isInsideRect(input.getMousePosition(), getSmileyBlockRect(config));
 		if (smileyHovered && input.isPressed('MouseLeft')) {
 			void sounds.play('click');
-			minesweeper = createMinesweeper(rows, cols);
-			globalThis.minesweeper = minesweeper;
+			resetMinesweeper(minesweeper, rows, cols);
 			config = computeConfig(canvas, minesweeper, images);
 		}
-		config.debugReveal = DEV && input.isDown('Space');
 
-		if (minesweeper?.generated && !minesweeper.done) {
+		const pauseButtonHovered =
+			minesweeper.generated && isInsideRect(input.getMousePosition(), getPauseButtonRect(config));
+		const canPause = minesweeper.generated && !minesweeper.done;
+		if (canPause && (input.isPressed('KeyP') || (pauseButtonHovered && input.isPressed('MouseLeft')))) {
+			minesweeper.paused = !minesweeper.paused;
+			void sounds.play('click');
+		}
+
+		const flagModeButtonHovered =
+			minesweeper.generated && isInsideRect(input.getMousePosition(), getFlagModeButtonRect(config));
+		if (
+			minesweeper.generated &&
+			(input.isPressed('KeyF') || (flagModeButtonHovered && input.isPressed('MouseLeft')))
+		) {
+			minesweeper.flagMode = !minesweeper.flagMode;
+			void sounds.play('click');
+		}
+
+		if (pauseButtonHovered) {
+			canvas.title = canPause
+				? `${minesweeper.paused ? 'Resume' : 'Pause'} (P)`
+				: 'Pause is available after the game starts';
+		} else if (flagModeButtonHovered) {
+			canvas.title = `Left click to ${minesweeper.flagMode ? 'Flag' : 'Reveal'} (F)`;
+		} else if (smileyHovered) {
+			canvas.title = `Click to reset (${rows}x${cols})`;
+		} else {
+			canvas.title = '';
+		}
+		config.debugReveal = DEV && !minesweeper.paused && input.isDown('Space');
+
+		if (minesweeper.generated && !minesweeper.done && !minesweeper.paused) {
 			minesweeper.time += deltaTime;
 		}
 
-		let isAnyHovered = smileyHovered;
+		let isAnyHovered = smileyHovered || flagModeButtonHovered || (canPause && pauseButtonHovered);
 		if (minesweeper.done && input.isPressed('KeyP')) {
 			// FIXME: This Keeps mines revealed for some reason, maybe related to generation of 'originalFlags'
 			globalThis.minesweeper = {
@@ -182,7 +218,9 @@ async function main(): Promise<void> {
 			};
 		}
 
-		drawTopbar(r, minesweeper, config, images);
+		drawTopbar(r, minesweeper, config, images, {
+			canPause,
+		});
 
 		r.setFont(config.cellFont);
 		r.context.textBaseline = config.textBaseline;
@@ -192,10 +230,14 @@ async function main(): Promise<void> {
 			for (let col = 0; col < minesweeper.field.cols; col++) {
 				try {
 					const cell = computeCell(config, minesweeper.field, row, col);
-					if (!minesweeper.done) {
+					if (!minesweeper.done && !minesweeper.paused) {
 						handleCellInput(minesweeper, input, cell, sounds);
 					}
-					drawCell(r, config, minesweeper, cell);
+					if (minesweeper.paused) {
+						drawPausedCell(r, cell);
+					} else {
+						drawCell(r, config, minesweeper, cell);
+					}
 					isAnyHovered ||= cell.hovered;
 				} catch (e) {
 					console.error(`[ERROR]: Failed to compute cell [${row};${col}]`, e);
@@ -205,6 +247,8 @@ async function main(): Promise<void> {
 
 		if (!minesweeper.generated) {
 			drawStartText(r, config);
+		} else if (minesweeper.paused) {
+			drawPausedText(r, config);
 		}
 
 		// PERF: Check if its fine to be constantly updating the style.
@@ -235,7 +279,24 @@ function createMinesweeper(rows: number, cols: number): Minesweeper {
 		failed: false,
 		solved: false,
 		time: 0,
+		paused: false,
+		flagMode: false,
 	};
+}
+
+function resetMinesweeper(minesweeper: Minesweeper, rows: number, cols: number): void {
+	console.debug('INFO: Initializing minesweeper');
+	minesweeper.field = emptyMinefield(rows, cols);
+	minesweeper.expectedMinesCount = Math.round(minesweeper.field.rows * minesweeper.field.cols * DEFAULT_MINE_DENSITY);
+	minesweeper.playerFlags = minesweeper.field.flags;
+	minesweeper.originalFlags = minesweeper.field.flags.map((row) => row.slice());
+	minesweeper.solverFlags = minesweeper.field.flags.map((row) => row.slice());
+	minesweeper.generated = false;
+	minesweeper.done = false;
+	minesweeper.failed = false;
+	minesweeper.solved = false;
+	minesweeper.time = 0;
+	minesweeper.paused = false;
 }
 
 type GameConfig = {
@@ -250,6 +311,7 @@ type GameConfig = {
 	topbarYOffset: number;
 	topbarHeight: number;
 	topbarGap: number;
+	topbarPaddingX: number;
 	topbarIconY: number;
 	topbarIconSize: number;
 	topbarFont: FontRendered;
@@ -266,6 +328,7 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 
 	const topbarHeight = shortestCanvasSide * TOPBAR_HEIGHT;
 	const topbarGap = outerPadding;
+	const topbarPaddingX = topbarHeight * 0.1;
 	const topbarYOffset = outerPadding;
 	const topbarFont: FontRendered = { size: topbarHeight * 0.8, weight: 700, family: 'Arial' };
 	const topbarIconSize = topbarHeight * 0.8;
@@ -298,6 +361,7 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 		topbarYOffset,
 		topbarHeight,
 		topbarGap,
+		topbarPaddingX,
 		topbarIconY,
 		topbarIconSize,
 		topbarFont,
@@ -363,9 +427,11 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 	// TODO: Instead of always have this as a shortcut, have a button that activates "hint" mode
 	//       and display the amount of hints used in a game to make player conscious of using them.
 	cell.hinted = DEV && cell.hovered && input.isDown('KeyH');
+	const revealPressed = input.isPressed(minesweeper.flagMode ? 'MouseRight' : 'MouseLeft');
+	const flagPressed = input.isPressed(minesweeper.flagMode ? 'MouseLeft' : 'MouseRight');
 
 	if (minesweeper.generated && cell.hovered && !cell.revealed) {
-		if (!cell.flagged && input.isPressed('MouseLeft')) {
+		if (!cell.flagged && revealPressed) {
 			void sounds.play('click');
 			cell.revealed = true;
 			const exploded = revealCell(minesweeper.field, cell.row, cell.col);
@@ -378,7 +444,7 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 			}
 			console.debug(`Revealed cell at ${cell.row}:${cell.col}`);
 		}
-		if (input.isPressed('MouseRight')) {
+		if (flagPressed) {
 			if (!cell.flagged && countFlags(minesweeper.field) >= minesweeper.field.minesCount) return;
 			void sounds.play('click');
 			console.debug(`Flagged cell at ${cell.row}:${cell.col}`);
@@ -426,97 +492,192 @@ function drawStartText(r: Renderer2d, config: GameConfig) {
 	r.context.globalAlpha = 1;
 }
 
-function drawTopbar(r: Renderer2d, minesweeper: Minesweeper, config: GameConfig, images: GameImages) {
+function drawPausedText(r: Renderer2d, config: GameConfig): void {
+	r.setFont(config.startFont);
+	const text = 'PAUSED';
+	const metrics = r.measureText(text);
+	const position = {
+		x: config.gridXOffset + config.gridWidth / 2,
+		y: config.gridYOffset + config.gridHeight / 2,
+	};
+	position.y += (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+	r.context.globalAlpha = 0.5;
+	r.drawText(text, position, Color.TEXT_TOPBAR);
+	r.context.globalAlpha = 1;
+}
+
+type TopbarInputState = {
+	canPause: boolean;
+};
+
+function drawTopbar(
+	r: Renderer2d,
+	minesweeper: Minesweeper,
+	config: GameConfig,
+	images: GameImages,
+	inputState: TopbarInputState,
+) {
 	r.context.textBaseline = config.textBaseline;
 	r.context.textAlign = config.textAlign;
-	const topbarYCenter = config.topbarYOffset + config.topbarHeight / 2;
-	const paddingX = config.topbarHeight * 0.1;
-	const time = minesweeper.generated ? minesweeper.time : 0;
-	const minesRemaining = minesweeper.generated
-		? Math.max(0, minesweeper.field.minesCount - countFlags(minesweeper.field))
-		: minesweeper.expectedMinesCount;
 	r.setFont(config.topbarFont);
-	const smileyBlockRect = getSmileyBlockRect(config);
 
-	// clock
-	r.drawRectRounded(
-		{
+	const pauseButtonRect = getPauseButtonRect(config);
+	drawTopbarClockSection(r, {
+		minesweeper,
+		config,
+		images,
+		rect: {
 			x: config.gridXOffset,
 			y: config.topbarYOffset,
-			width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
+			width: pauseButtonRect.x - config.gridXOffset - config.topbarGap,
 			height: config.topbarHeight,
 		},
-		TOPBAR_RADIUS,
-		Color.TIME_BG,
-	);
-	if (time > 0) {
-		let x = config.gridXOffset + paddingX;
-		r.drawImage(images.clock, x, config.topbarIconY, config.topbarIconSize, config.topbarIconSize);
-		x += config.topbarIconSize + paddingX;
-		{
-			let text = timeToHumanString(time);
-			let m = r.measureText(text);
-			let textY = topbarYCenter;
-			x += m.width / 2;
-			const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
-			textY += ascentDiff / 2;
-			r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
-		}
-	}
-
-	{
-		// smiley
-		let image: HTMLImageElement | undefined;
-		if (minesweeper.generated && minesweeper.done) {
-			image = minesweeper.failed ? images.smileyDead : images.smileyCool;
-		} else {
-			image = images.smiley;
-		}
-		r.drawRectRounded(smileyBlockRect, TOPBAR_RADIUS, Color.SMILEY_BG);
-		const smileyIconRect = getSmileyIconRect(config);
-		r.drawImage(image, smileyIconRect.x, smileyIconRect.y, smileyIconRect.width, smileyIconRect.height);
-	}
-
-	// mines
-	r.drawRectRounded(
-		{
-			x: smileyBlockRect.x + smileyBlockRect.width + config.topbarGap,
+	});
+	drawTopbarPauseButton(r, {
+		rect: pauseButtonRect,
+		paused: minesweeper.paused,
+		enabled: inputState.canPause,
+		showIcon: minesweeper.generated,
+	});
+	drawTopbarSmileyButton(r, {
+		rect: getSmileyBlockRect(config),
+		config,
+		minesweeper,
+		images,
+	});
+	const flagModeButtonRect = getFlagModeButtonRect(config);
+	drawTopbarFlagModeButton(r, {
+		rect: flagModeButtonRect,
+		images: images,
+		isFlagMode: minesweeper.flagMode,
+		showIcon: minesweeper.generated,
+	});
+	const minesX = flagModeButtonRect.x + flagModeButtonRect.width + config.topbarGap;
+	drawTopbarMinesSection(r, {
+		config,
+		images,
+		minesweeper,
+		rect: {
+			x: minesX,
 			y: config.topbarYOffset,
-			width: smileyBlockRect.x - config.gridXOffset - config.topbarGap,
+			width: config.gridXOffset + config.gridWidth - minesX,
 			height: config.topbarHeight,
 		},
-		TOPBAR_RADIUS,
-		Color.MINES_BG,
-	);
-	if (minesweeper.generated) {
-		// Start from the right edge of the grid
-		let x = config.gridXOffset + config.gridWidth;
-		{
-			x -= config.topbarIconSize;
-			x -= paddingX;
-			r.drawImage(images.mine, x, config.topbarIconY, config.topbarIconSize, config.topbarIconSize);
-		}
-		{
-			const text = minesRemaining.toString().padStart(3, '0');
-			const m = r.measureText(text);
-			let textY = topbarYCenter;
-			{
-				x -= paddingX + m.width / 2;
-				const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
-				textY += ascentDiff / 2;
-				r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
-			}
-		}
+	});
+}
+
+function drawTopbarClockSection(
+	r: Renderer2d,
+	options: {
+		rect: Rect;
+		minesweeper: Minesweeper;
+		config: GameConfig;
+		images: GameImages;
+	},
+) {
+	const { rect, minesweeper, config, images } = options;
+	const time = minesweeper.generated ? minesweeper.time : 0;
+	const topbarYCenter = config.topbarYOffset + config.topbarHeight / 2;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.TIME_BG);
+
+	if (time > 0) {
+		const iconX = config.gridXOffset + config.topbarPaddingX;
+		const iconY = rect.y + rect.height / 2 - config.topbarIconSize / 2;
+		r.drawImage(images.clock, iconX, iconY, config.topbarIconSize, config.topbarIconSize);
+
+		const text = timeToHumanString(time);
+		const textMetrics = r.measureText(text);
+		const textX = iconX + config.topbarIconSize + config.topbarPaddingX + textMetrics.width / 2;
+		const ascentDiff = textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent;
+		const textY = topbarYCenter + ascentDiff / 2;
+		r.drawText(text, { x: textX, y: textY }, Color.TEXT_TOPBAR);
 	}
 }
 
-function getSmileyIconRect(config: GameConfig): Rect {
-	return {
-		x: config.gridXOffset + config.gridWidth / 2 - config.topbarIconSize / 2,
-		y: config.topbarYOffset + config.topbarHeight / 2 - config.topbarIconSize / 2,
+function drawTopbarPauseButton(
+	r: Renderer2d,
+	options: {
+		rect: Rect;
+		paused: boolean;
+		enabled: boolean;
+		showIcon: boolean;
+	},
+): void {
+	const { rect, paused, enabled, showIcon } = options;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.NUMBER2_BG);
+	if (!showIcon) return;
+
+	r.context.globalAlpha = enabled ? 1 : 0.35;
+	if (paused) {
+		drawResumeIcon(r, rect, Color.CELL_TEXT);
+	} else {
+		drawPauseIcon(r, rect, Color.CELL_TEXT);
+	}
+	r.context.globalAlpha = 1;
+}
+
+function drawResumeIcon(r: Renderer2d, rect: Rect, color: string): void {
+	r.context.fillStyle = color;
+	r.context.beginPath();
+	r.context.moveTo(rect.x + rect.width * 0.39, rect.y + rect.height * 0.27);
+	r.context.lineTo(rect.x + rect.width * 0.73, rect.y + rect.height * 0.5);
+	r.context.lineTo(rect.x + rect.width * 0.39, rect.y + rect.height * 0.73);
+	r.context.closePath();
+	r.context.fill();
+}
+
+function drawPauseIcon(r: Renderer2d, rect: Rect, color: string): void {
+	const barWidth = rect.width * 0.13;
+	const barHeight = rect.height * 0.48;
+	const barY = rect.y + (rect.height - barHeight) / 2;
+	r.drawRect(rect.x + rect.width * 0.32, barY, barWidth, barHeight, color);
+	r.drawRect(rect.x + rect.width * 0.55, barY, barWidth, barHeight, color);
+}
+
+function drawTopbarSmileyButton(
+	r: Renderer2d,
+	options: {
+		rect: Rect;
+		config: GameConfig;
+		minesweeper: Minesweeper;
+		images: GameImages;
+	},
+): void {
+	const { rect, config, minesweeper, images } = options;
+	let image: HTMLImageElement | undefined;
+	if (minesweeper.generated && minesweeper.done) {
+		image = minesweeper.failed ? images.smileyDead : images.smileyCool;
+	} else {
+		image = images.smiley;
+	}
+	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.SMILEY_BG);
+	const paddingX = (rect.width - config.topbarIconSize) / 2;
+	const paddingY = (rect.height - config.topbarIconSize) / 2;
+	const smileyIconRect: Rect = {
+		x: rect.x + paddingX,
+		y: rect.y + paddingY,
 		width: config.topbarIconSize,
 		height: config.topbarIconSize,
 	};
+	r.drawImage(image, smileyIconRect.x, smileyIconRect.y, smileyIconRect.width, smileyIconRect.height);
+}
+
+function drawTopbarFlagModeButton(
+	r: Renderer2d,
+	options: {
+		rect: Rect;
+		images: GameImages;
+		isFlagMode: boolean;
+		showIcon: boolean;
+	},
+): void {
+	const { rect, images, isFlagMode, showIcon } = options;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.NUMBER4_BG);
+	if (!showIcon) return;
+
+	const iconSize = rect.height * 0.78;
+	const image = isFlagMode ? images.flag : images.mine;
+	r.drawImage(image, rect.x + (rect.width - iconSize) / 2, rect.y + (rect.height - iconSize) / 2, iconSize, iconSize);
 }
 
 function getSmileyBlockRect(config: GameConfig): Rect {
@@ -527,6 +688,57 @@ function getSmileyBlockRect(config: GameConfig): Rect {
 		width: size,
 		height: size,
 	};
+}
+
+function getPauseButtonRect(config: GameConfig): Rect {
+	const smileyRect = getSmileyBlockRect(config);
+	return {
+		x: smileyRect.x - config.topbarGap - config.topbarHeight,
+		y: config.topbarYOffset,
+		width: config.topbarHeight,
+		height: config.topbarHeight,
+	};
+}
+
+function getFlagModeButtonRect(config: GameConfig): Rect {
+	const smileyRect = getSmileyBlockRect(config);
+	return {
+		x: smileyRect.x + smileyRect.width + config.topbarGap,
+		y: config.topbarYOffset,
+		width: config.topbarHeight,
+		height: config.topbarHeight,
+	};
+}
+
+function drawTopbarMinesSection(
+	r: Renderer2d,
+	options: {
+		rect: Rect;
+		config: GameConfig;
+		images: GameImages;
+		minesweeper: Minesweeper;
+	},
+): void {
+	const { rect, config, images, minesweeper } = options;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.MINES_BG);
+	if (!minesweeper.generated) return;
+
+	const rightX = rect.x + rect.width;
+	const imageX = rightX - config.topbarIconSize - config.topbarPaddingX;
+	const imageY = rect.y + (rect.height - config.topbarIconSize) / 2;
+	r.drawImage(images.mine, imageX, imageY, config.topbarIconSize, config.topbarIconSize);
+
+	const minesRemaining = Math.max(0, minesweeper.field.minesCount - countFlags(minesweeper.field));
+	const text = minesRemaining.toString().padStart(3, '0');
+	const textMetrics = r.measureText(text);
+	const ascentDiff = textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent;
+	const textY = rect.y + rect.height / 2 + ascentDiff / 2;
+	const textX = imageX - config.topbarPaddingX - textMetrics.width / 2;
+	r.drawText(text, { x: textX, y: textY }, Color.TEXT_TOPBAR);
+}
+
+function drawPausedCell(r: Renderer2d, cell: CellInfo): void {
+	r.drawRectRounded(cell.rect, CELL_RADIUS, Color.CELL_EMPTY);
 }
 
 function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, cell: CellInfo): void {
