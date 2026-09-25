@@ -865,7 +865,7 @@ function generateMinefield(minesweeper: Minesweeper, targetIndex: number, seed?:
 			matrix2Fill(minefield.data, NONE);
 			placeMinefieldMines(minefield, targetIndex, random);
 		} else {
-			shuffleUnknownCells(minefield, random);
+			shuffleUnknownCells(minefield, random, minesweeper.solverFlags);
 		}
 		placeMinefieldNumbers(minefield);
 		minesweeper.field = minefield;
@@ -946,11 +946,13 @@ function placeMinefieldNumbers(minefield: Minefield): void {
 	}
 }
 
-function shuffleUnknownCells(minefield: Minefield, random: Random): void {
+function shuffleUnknownCells(minefield: Minefield, random: Random, solverFlags: number[][]): void {
 	const cols = minefield.cols;
 	const unknownIndices: number[] = [];
 	for (let index of allIndices(minefield)) {
-		const flag = getCellFlagByIndex(minefield, index);
+		const row = rowOf(index, cols);
+		const col = colOf(index, cols);
+		const flag = solverFlags[row]?.[col];
 		if (flag === Flag.UNKNOWN) {
 			unknownIndices.push(index);
 		}
@@ -973,6 +975,8 @@ function shuffleUnknownCells(minefield: Minefield, random: Random): void {
 		minefield.data[rowJ][colJ] = temp;
 		minefield.flags[rowI][colI] = Flag.UNKNOWN;
 		minefield.flags[rowJ][colJ] = Flag.UNKNOWN;
+		solverFlags[rowI][colI] = Flag.UNKNOWN;
+		solverFlags[rowJ][colJ] = Flag.UNKNOWN;
 	}
 }
 
