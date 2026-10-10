@@ -1,4 +1,5 @@
 import { isInsideRect, v2Clone, type Rect, type Vec2 } from '$math';
+import { Color, initColors } from './colors';
 import { KeyboardInput } from './input';
 import { Random } from './random';
 import { Renderer2d, type FontRendered } from './renderer';
@@ -9,7 +10,6 @@ import './style.css';
 TODO:
 - Add a mute button (and key).
 - Add a scoreboard.
-- Add multiple presets with different minefield sizes and difficulty levels.
 - Allow optionally specifying the seed for minefield generation in the URL.
 - Add a second "theme" where number color is displayed as text instead of a background.
 - If screen is vertical, rotate the board.
@@ -19,43 +19,28 @@ TODO:
 - Add a cool lose animation (some kind of explosion?).
 */
 
-const Color = {
-	BACKGROUND: '--color-bg',
-	CELL: '--color-cell',
-	CELL_HOVER: '--color-cell-hover',
-	CELL_EMPTY: '--color-cell-empty',
-	CELL_WRONG: '--color-cell-wrong',
-	CELL_EXPLODED: '--color-cell-exploded',
-	CELL_TEXT: '--color-cell-text',
-	TIME_BG: '--color-time-bg',
-	MINES_BG: '--color-mines-bg',
-	SMILEY_BG: '--color-smiley-bg',
-	TEXT_TOPBAR: '--color-text-topbar',
-	NUMBER1_BG: '--color-number-1-bg',
-	NUMBER2_BG: '--color-number-2-bg',
-	NUMBER3_BG: '--color-number-3-bg',
-	NUMBER4_BG: '--color-number-4-bg',
-	NUMBER5_BG: '--color-number-5-bg',
-	NUMBER6_BG: '--color-number-6-bg',
-	NUMBER7_BG: '--color-number-7-bg',
-	NUMBER8_BG: '--color-number-8-bg',
-	NUMBER1_FG: '--color-number-1-fg',
-	NUMBER2_FG: '--color-number-2-fg',
-	NUMBER3_FG: '--color-number-3-fg',
-	NUMBER4_FG: '--color-number-4-fg',
-	NUMBER5_FG: '--color-number-5-fg',
-	NUMBER6_FG: '--color-number-6-fg',
-	NUMBER7_FG: '--color-number-7-fg',
-	NUMBER8_FG: '--color-number-8-fg',
-};
-const ColorVar = {
-	...Color,
-} as const;
-
 declare global {
-	var minesweeper: Minesweeper | undefined;
+	var __MINESWEEPER_STATE: GameState;
 }
 
+// This object is not persisted and only exists in memory
+type GameState = {
+	minesweeper: Minesweeper;
+	selectingDifficulty: boolean;
+	canChangeDifficulty: boolean;
+	canReset: boolean;
+	hoveredDifficultyIndex: number; // -1 when none is hovered
+	isAnyHovered: boolean;
+	hoverButtonId: ButtonId | null;
+	layout: GameLayout;
+	renderer: Renderer2d;
+	input: KeyboardInput;
+	sounds: SoundManager;
+	images: GameImages;
+	debugReveal: boolean;
+};
+
+// This whole object is persisted
 type Minesweeper = {
 	field: Minefield;
 	originalFlags: number[][];
@@ -85,158 +70,116 @@ const TOPBAR_HEIGHT = 0.07;
 const TOPBAR_RADIUS = 4;
 const CELL_RADIUS = 4;
 const DEFAULT_MINE_DENSITY = 0.25;
-const DEFAULT_ROWS = 16;
-const DEFAULT_COLS = 30;
 const DEV = new URL(location.href).hostname === 'localhost';
+
+type GridSize = { rows: number; cols: number };
+
+const gridSizes: GridSize[] = [
+	{ rows: 8, cols: 15 },
+	{ rows: 12, cols: 22 },
+	{ rows: 16, cols: 30 },
+];
+const defaultGridSize = gridSizes[1];
 
 async function main(): Promise<void> {
 	console.log('[INFO]: Game version 0.1');
 	initColors();
 	const appElement = document.getElementById('app');
-	const storage: Storage = localStorage;
-
 	if (!appElement) {
 		console.error('[ERROR]: App element not found');
 		return;
 	}
 
-	const canvas = document.createElement('canvas');
-	// Disable context menu from appearing on right-click
-	canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+	const renderer = createRenderer();
+	if (!renderer) return;
+	const canvas = renderer.context.canvas;
 	appElement.appendChild(canvas);
-	const sounds = new SoundManager();
-	canvas.addEventListener('pointerdown', sounds.unlock);
-	const context = canvas.getContext('2d');
-	if (!context) {
-		console.error('[ERROR]: Canvas context not supported');
-		return;
-	}
 
-	const savedMinesweeper = storage.getItem('minesweeper');
-	if (savedMinesweeper) {
-		try {
-			const saved = JSON.parse(savedMinesweeper) as Minesweeper;
-			saved.playerFlags = saved.field.flags;
-			saved.paused = false;
-			saved.flagMode ??= false; // Initialize for backwards compatibility when this field didn't exist.
-			globalThis.minesweeper = saved;
-		} catch (e) {
-			console.error('[ERROR]: Failed to parse saved minesweeper', e);
-		}
-	}
+	renderer.resizeCanvas(window.innerWidth, window.innerHeight);
+	window.addEventListener('resize', () => {
+		renderer.resizeCanvas(window.innerWidth, window.innerHeight);
+	});
+
+	const sounds = new SoundManager();
+	renderer.context.canvas.addEventListener('mousedown', sounds.unlock);
+
+	let savedMinesweeper = tryLoadPersistedGameState();
+	savedMinesweeper ??= createMinesweeper(defaultGridSize.rows, defaultGridSize.cols);
+
+	const input = new KeyboardInput();
+	input.listen(document.body, renderer.context.canvas);
 
 	const images = await loadImages();
 
-	const r = new Renderer2d(context);
-	r.context.imageSmoothingEnabled = false;
-	r.resizeCanvas(window.innerWidth, window.innerHeight);
+	const state: GameState = {
+		minesweeper: savedMinesweeper,
+		selectingDifficulty: false,
+		canChangeDifficulty: false,
+		canReset: false,
+		hoveredDifficultyIndex: -1,
+		layout: recalculateLayout(canvas, savedMinesweeper.field, null),
+		renderer: renderer,
+		input: input,
+		sounds: sounds,
+		images: images,
+		isAnyHovered: false,
+		hoverButtonId: null,
+		debugReveal: false,
+	};
+	globalThis.__MINESWEEPER_STATE = state;
 
-	window.addEventListener('resize', () => {
-		r.resizeCanvas(window.innerWidth, window.innerHeight);
-	});
 	window.addEventListener('beforeunload', () => {
-		if (minesweeper) {
-			minesweeper.field.flags = minesweeper.playerFlags;
-			storage.setItem('minesweeper', JSON.stringify(minesweeper));
-		}
+		persistMinesweeper(state.minesweeper);
 	});
 
-	const input = new KeyboardInput();
-	input.listen(document.body, document.body);
+	startLoop(state);
+}
 
-	const rows = DEFAULT_ROWS;
-	const cols = DEFAULT_COLS;
-
+function startLoop(state: GameState): void {
 	let lastTime = performance.now();
 	const tick = (time: number) => {
 		const deltaTime = time - lastTime;
 		lastTime = time;
 
-		if (!globalThis.minesweeper) {
-			globalThis.minesweeper = createMinesweeper(rows, cols);
-		}
-		let minesweeper = globalThis.minesweeper;
-		if (input.isPressed('KeyR')) {
-			resetMinesweeper(minesweeper, rows, cols);
-		}
+		const { input, sounds, renderer } = state;
+		const layout = (state.layout = recalculateLayout(state.renderer.canvas, state.minesweeper.field, state.layout));
 
-		r.fillScreen(Color.BACKGROUND);
-
-		let config = computeConfig(canvas, minesweeper, images);
-		const smileyHovered =
-			minesweeper.generated && isInsideRect(input.getMousePosition(), getSmileyBlockRect(config));
-		if (smileyHovered && input.isPressed('MouseLeft')) {
-			void sounds.play('click');
-			resetMinesweeper(minesweeper, rows, cols);
-			config = computeConfig(canvas, minesweeper, images);
-		}
-
-		const pauseButtonHovered =
-			minesweeper.generated && isInsideRect(input.getMousePosition(), getPauseButtonRect(config));
-		const canPause = minesweeper.generated && !minesweeper.done;
-		if (canPause && (input.isPressed('KeyP') || (pauseButtonHovered && input.isPressed('MouseLeft')))) {
-			minesweeper.paused = !minesweeper.paused;
-			void sounds.play('click');
-		}
-
-		const flagModeButtonHovered =
-			minesweeper.generated && isInsideRect(input.getMousePosition(), getFlagModeButtonRect(config));
-		if (
-			minesweeper.generated &&
-			(input.isPressed('KeyF') || (flagModeButtonHovered && input.isPressed('MouseLeft')))
-		) {
-			minesweeper.flagMode = !minesweeper.flagMode;
-			void sounds.play('click');
-		}
-
-		if (pauseButtonHovered) {
-			canvas.title = canPause
-				? `${minesweeper.paused ? 'Resume' : 'Pause'} (P)`
-				: 'Pause is available after the game starts';
-		} else if (flagModeButtonHovered) {
-			canvas.title = `Left click to ${minesweeper.flagMode ? 'Flag' : 'Reveal'} (F)`;
-		} else if (smileyHovered) {
-			canvas.title = `Click to reset (${rows}x${cols})`;
-		} else {
-			canvas.title = '';
-		}
-		config.debugReveal = DEV && !minesweeper.paused && input.isDown('Space');
+		state.canChangeDifficulty = !isGameActive(state.minesweeper);
+		state.canReset = state.minesweeper.generated;
+		const wasSelectingDifficulty = state.selectingDifficulty;
+		handleTopbarInput(state);
+		let minesweeper = state.minesweeper;
 
 		if (minesweeper.generated && !minesweeper.done && !minesweeper.paused) {
 			minesweeper.time += deltaTime;
 		}
 
-		let isAnyHovered = smileyHovered || flagModeButtonHovered || (canPause && pauseButtonHovered);
-		if (minesweeper.done && input.isPressed('KeyP')) {
-			// FIXME: This Keeps mines revealed for some reason, maybe related to generation of 'originalFlags'
-			globalThis.minesweeper = {
-				...minesweeper,
-				done: false,
-				failed: false,
-				time: 0,
-				playerFlags: minesweeper.originalFlags.map((r) => r.slice()),
-			};
-		}
+		let isAnyHovered = state.hoverButtonId != null;
 
-		drawTopbar(r, minesweeper, config, images, {
-			canPause,
-		});
+		renderer.fillScreen(Color.BACKGROUND);
+		drawTopbar(state);
 
-		r.setFont(config.cellFont);
-		r.context.textBaseline = config.textBaseline;
-		r.context.textAlign = config.textAlign;
+		renderer.setFont(layout.cellFont);
+		renderer.context.textBaseline = layout.textBaseline;
+		renderer.context.textAlign = layout.textAlign;
 
 		for (let row = 0; row < minesweeper.field.rows; row++) {
 			for (let col = 0; col < minesweeper.field.cols; col++) {
 				try {
-					const cell = computeCell(config, minesweeper.field, row, col);
-					if (!minesweeper.done && !minesweeper.paused) {
+					const cell = computeCell(layout, minesweeper.field, row, col);
+					if (
+						!state.selectingDifficulty &&
+						!wasSelectingDifficulty &&
+						state.hoverButtonId === null &&
+						!minesweeper.done &&
+						!minesweeper.paused
+					) {
 						handleCellInput(minesweeper, input, cell, sounds);
 					}
 					if (minesweeper.paused) {
-						drawPausedCell(r, cell);
+						drawPausedCell(renderer, cell);
 					} else {
-						drawCell(r, config, minesweeper, cell);
+						drawCell(state, cell);
 					}
 					isAnyHovered ||= cell.hovered;
 				} catch (e) {
@@ -246,16 +189,21 @@ async function main(): Promise<void> {
 		}
 
 		if (!minesweeper.generated) {
-			drawStartText(r, config);
+			drawStartText(renderer, layout);
 		} else if (minesweeper.paused) {
-			drawPausedText(r, config);
+			drawPausedText(renderer, layout);
+		}
+		if (state.selectingDifficulty) {
+			drawDifficultySelectionPanel(state);
 		}
 
 		// PERF: Check if its fine to be constantly updating the style.
 		if (isAnyHovered) {
-			document.body.style.cursor = 'pointer';
+			renderer.canvas.style.cursor = 'pointer';
 		} else {
-			document.body.style.cursor = 'default';
+			const difficultyDisallowed =
+				state.selectingDifficulty && !state.canChangeDifficulty && state.hoverButtonId === 'difficulty-panel';
+			renderer.canvas.style.cursor = difficultyDisallowed ? 'not-allowed' : 'default';
 		}
 
 		input.nextTick();
@@ -264,7 +212,49 @@ async function main(): Promise<void> {
 	requestAnimationFrame(tick);
 }
 
-function createMinesweeper(rows: number, cols: number): Minesweeper {
+function createRenderer(): Renderer2d | null {
+	const canvas = document.createElement('canvas');
+	{
+		canvas.setAttribute('role', 'img');
+		canvas.setAttribute('aria-label', 'Minesweeper');
+		// Disable context menu from appearing on right-click
+		canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+	}
+	const context = canvas.getContext('2d');
+	if (!context) {
+		console.error('[ERROR]: Canvas context not supported');
+		return null;
+	}
+	const r = new Renderer2d(context);
+	r.context.imageSmoothingEnabled = false;
+	return r;
+}
+
+function isGameActive(game: Minesweeper): boolean {
+	return game.generated && !game.done;
+}
+
+function tryLoadPersistedGameState(): Minesweeper | null {
+	try {
+		const savedMinesweeper = localStorage.getItem('minesweeper');
+		if (savedMinesweeper) {
+			const saved = JSON.parse(savedMinesweeper) as Minesweeper;
+			if (!isPersistedGameStateValid(saved)) {
+				throw new Error('Invalid Persisted game state');
+			}
+			saved.playerFlags = saved.field.flags;
+			saved.paused = false;
+			saved.flagMode ??= false; // Initialize for backwards compatibility when this field didn't exist.
+			return saved;
+		}
+		return null;
+	} catch (e) {
+		console.warn('[WARNING]: Errored while loading persisted game state', e);
+		return null;
+	}
+}
+
+function createMinesweeper(rows: number, cols: number, flagMode = false): Minesweeper {
 	console.debug('INFO: Initializing minesweeper');
 	const field = emptyMinefield(rows, cols);
 	const expectedMinesCount = Math.round(field.rows * field.cols * DEFAULT_MINE_DENSITY);
@@ -280,26 +270,53 @@ function createMinesweeper(rows: number, cols: number): Minesweeper {
 		solved: false,
 		time: 0,
 		paused: false,
-		flagMode: false,
+		flagMode,
 	};
 }
 
-function resetMinesweeper(minesweeper: Minesweeper, rows: number, cols: number): void {
-	console.debug('INFO: Initializing minesweeper');
-	minesweeper.field = emptyMinefield(rows, cols);
-	minesweeper.expectedMinesCount = Math.round(minesweeper.field.rows * minesweeper.field.cols * DEFAULT_MINE_DENSITY);
-	minesweeper.playerFlags = minesweeper.field.flags;
-	minesweeper.originalFlags = minesweeper.field.flags.map((row) => row.slice());
-	minesweeper.solverFlags = minesweeper.field.flags.map((row) => row.slice());
-	minesweeper.generated = false;
-	minesweeper.done = false;
-	minesweeper.failed = false;
-	minesweeper.solved = false;
-	minesweeper.time = 0;
-	minesweeper.paused = false;
+function resetMinesweeper(state: GameState, size?: GridSize): Minesweeper {
+	const flagMode = state.minesweeper.flagMode;
+	size ??= state.minesweeper.field;
+	state.minesweeper = createMinesweeper(size.rows, size.cols, flagMode);
+	return state.minesweeper;
 }
 
-type GameConfig = {
+function isPersistedGameStateValid(game: Minesweeper): boolean {
+	const field = game?.field;
+	if (!field || !Number.isInteger(field.rows) || !Number.isInteger(field.cols) || field.rows <= 0 || field.cols <= 0)
+		return false;
+	const matrixMatches = (matrix: number[][]) =>
+		Array.isArray(matrix) &&
+		matrix.length === field.rows &&
+		matrix.every((row) => Array.isArray(row) && row.length === field.cols && row.every(Number.isFinite));
+	return (
+		[field.data, field.flags, game.originalFlags, game.solverFlags].every(matrixMatches) &&
+		Number.isFinite(game.time) &&
+		Number.isFinite(game.expectedMinesCount) &&
+		Number.isFinite(field.minesCount)
+	);
+}
+
+function persistMinesweeper(game: Minesweeper): void {
+	game.field.flags = game.playerFlags;
+	try {
+		localStorage.setItem('minesweeper', JSON.stringify(game));
+	} catch (err) {
+		console.error('Failed to persist minesweeper', err);
+		// If a write fails, do not resurrect an obsolete round on the next reload.
+		try {
+			localStorage.removeItem('minesweeper');
+		} catch (err) {
+			/* Storage may be denied entirely. */
+		}
+	}
+}
+
+type TopbarLayout = Record<'time' | 'pause' | 'difficulty' | 'smiley' | 'flag' | 'mines', Rect>;
+type ButtonId = 'pause' | 'difficulty-top' | 'smiley' | 'flag' | 'difficulty-panel';
+
+type GameLayout = {
+	layoutKey: string;
 	cellSize: number;
 	cellPadding: number;
 	cellFont: FontRendered;
@@ -317,19 +334,32 @@ type GameConfig = {
 	topbarFont: FontRendered;
 	textBaseline: CanvasTextBaseline;
 	textAlign: CanvasTextAlign;
-	debugReveal: boolean;
-	images: GameImages;
+	topbar: TopbarLayout;
+	difficulty: DifficultyLayout;
 };
 
-function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, images: GameImages): GameConfig {
-	const { rows, cols } = minesweeper.field;
+function recalculateLayout(canvas: HTMLCanvasElement, size: GridSize, prevLayout: GameLayout | null): GameLayout {
+	const layoutKey = makeLayoutKey(canvas, size);
+	if (layoutKey === prevLayout?.layoutKey) return prevLayout;
+	const layout = computeLayout(canvas, size);
+	return layout;
+}
+
+function makeLayoutKey(canvas: HTMLCanvasElement, size: GridSize): string {
+	return `${canvas.width}:${canvas.height}:${size.rows}:${size.cols}`;
+}
+
+function computeLayout(canvas: HTMLCanvasElement, size: GridSize): GameLayout {
+	const { rows, cols } = size;
 	const shortestCanvasSide = Math.min(canvas.width, canvas.height);
 	const outerPadding = shortestCanvasSide * PADDING_CANVAS;
 
 	const topbarHeight = shortestCanvasSide * TOPBAR_HEIGHT;
 	const topbarGap = outerPadding;
+	const topbarWidth = canvas.width - topbarGap * 2;
+	const topbarXOffset = topbarGap;
+	const topbarYOffset = topbarGap;
 	const topbarPaddingX = topbarHeight * 0.1;
-	const topbarYOffset = outerPadding;
 	const topbarFont: FontRendered = { size: topbarHeight * 0.8, weight: 700, family: 'Arial' };
 	const topbarIconSize = topbarHeight * 0.8;
 	const topbarIconY = topbarYOffset + topbarHeight / 2 - topbarIconSize / 2;
@@ -349,8 +379,30 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 	const gridYOffset = topbarYOffset + topbarHeight + outerPadding;
 
 	const startFont: FontRendered = { size: gridHeight * 0.15, weight: 700, family: 'Arial' };
+	const square = (x: number): Rect => ({ x, y: topbarYOffset, width: topbarHeight, height: topbarHeight });
+	const smiley = square(gridXOffset + gridWidth / 2 - topbarHeight / 2);
+	const difficulty = square(smiley.x - topbarHeight - topbarGap);
+	const pause = square(difficulty.x - topbarHeight - topbarGap);
+	const flag = square(smiley.x + topbarHeight + topbarGap);
+	const minesX = flag.x + topbarHeight + topbarGap;
+	const topbar: TopbarLayout = {
+		smiley,
+		difficulty,
+		pause,
+		flag,
+		time: {
+			x: topbarGap,
+			y: topbarYOffset,
+			width: Math.max(0, pause.x - topbarGap - topbarGap),
+			height: topbarHeight,
+		},
+		mines: { x: minesX, y: topbarYOffset, width: topbarXOffset + topbarWidth - minesX, height: topbarHeight },
+	};
+	const difficultyLayout = computeDifficultyLayout(canvas, topbar.difficulty, topbarGap);
+	const layoutKey = makeLayoutKey(canvas, size);
 
 	return {
+		layoutKey,
 		cellSize,
 		cellPadding,
 		cellFont,
@@ -366,11 +418,122 @@ function computeConfig(canvas: HTMLCanvasElement, minesweeper: Minesweeper, imag
 		topbarIconSize,
 		topbarFont,
 		startFont,
-		images,
+		topbar,
+		difficulty: difficultyLayout,
 		textBaseline: 'middle',
 		textAlign: 'center',
-		debugReveal: false,
 	};
+}
+
+type DifficultyLayout = {
+	panel: Rect;
+	choices: Rect[];
+};
+
+function computeDifficultyLayout(canvas: HTMLCanvasElement, anchor: Rect, gap: number): DifficultyLayout {
+	const margin = gap;
+	const padding = gap;
+	const size = anchor.width * 1.5;
+	// Top padding gives the first tile the same visible gap below the trigger.
+	const desiredY = anchor.y + anchor.height;
+	const width = gridSizes.length * size + (gridSizes.length - 1) * gap + padding * 2;
+	const height = size + padding * 2;
+	const x = Math.max(margin, Math.min(anchor.x + anchor.width / 2 - width / 2, canvas.width - width - margin));
+	const y = Math.max(margin, Math.min(desiredY, canvas.height - height - margin));
+	return {
+		panel: { x, y, width, height },
+		choices: gridSizes.map((_, index) => ({
+			x: x + padding + index * (size + gap),
+			y: y + padding,
+			width: size,
+			height: size,
+		})),
+	};
+}
+
+function findHoveredDifficultyIndex(layout: DifficultyLayout, mouse: Vec2): number {
+	return layout.choices.findIndex((rect) => isInsideRect(mouse, rect));
+}
+
+function drawTopbarDifficultyButton(
+	r: Renderer2d,
+	props: {
+		rect: Rect;
+		selectingDifficulty: boolean;
+	},
+): void {
+	r.drawRectRounded(props.rect, TOPBAR_RADIUS, Color.NUMBER2_BG);
+	if (props.selectingDifficulty) {
+		drawCrossIcon(r, props.rect, Color.TEXT);
+	} else {
+		drawCellsIcon(r, props.rect, Color.TEXT);
+	}
+}
+
+function drawCrossIcon(r: Renderer2d, rect: Rect, color: string): void {
+	const inset = rect.width * 0.28;
+	const lineWidth = Math.max(1, rect.width * 0.065);
+	r.drawLine(
+		{ x: rect.x + inset, y: rect.y + inset },
+		{ x: rect.x + rect.width - inset, y: rect.y + rect.height - inset },
+		color,
+		lineWidth,
+	);
+	r.drawLine(
+		{ x: rect.x + inset, y: rect.y + rect.height - inset },
+		{ x: rect.x + rect.width - inset, y: rect.y + inset },
+		color,
+		lineWidth,
+	);
+}
+
+function drawCellsIcon(r: Renderer2d, rect: Rect, color: string): void {
+	const side = Math.min(rect.width, rect.height);
+	const x = rect.x + (rect.width - side) / 2 + side * 0.2;
+	const y = rect.y + (rect.height - side) / 2 + side * 0.2;
+	const size = side * 0.26;
+	const step = side * 0.34;
+	for (let row = 0; row < 2; row++)
+		for (let col = 0; col < 2; col++) {
+			r.drawRectRounded({ x: x + col * step, y: y + row * step, width: size, height: size }, side * 0.04, color);
+		}
+}
+
+function drawDifficultySelectionPanel(state: GameState): void {
+	const { renderer: r } = state;
+	const { panel, choices } = state.layout.difficulty;
+	const field = state.minesweeper.field;
+	const context = r.context;
+	const oldFont = r.font;
+	context.save();
+	context.globalAlpha *= state.canChangeDifficulty ? 1 : 0.7;
+	r.drawRectRounded(panel, 4, Color.BACKGROUND);
+	context.textBaseline = 'middle';
+	context.textAlign = 'center';
+	r.setFont({ size: (choices[0].height - 4) * 0.34, family: 'Arial', weight: 700 });
+	for (const [index, choiceRect] of choices.entries()) {
+		const size = gridSizes[index];
+		const selected = size.rows === field.rows && size.cols === field.cols;
+		let color = Color.DIFFICULTY_ITEM;
+		if (selected) color = Color.DIFFICULTY_SELECTED;
+		else if (state.canChangeDifficulty && state.hoveredDifficultyIndex === index) color = Color.DIFFICULTY_HOVER;
+		r.drawRectRounded(choiceRect, 4, color);
+		const text = `${size.cols}×${size.rows}`;
+		const metrics = r.measureText(text);
+		r.drawText(
+			text,
+			{
+				x: choiceRect.x + choiceRect.width / 2,
+				y:
+					choiceRect.y +
+					choiceRect.height / 2 +
+					(metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2,
+			},
+			Color.TEXT,
+		);
+	}
+	context.restore();
+	r.setFont(oldFont);
 }
 
 type CellInfo = {
@@ -387,7 +550,7 @@ type CellInfo = {
 	value: number;
 };
 
-function computeCell(config: GameConfig, minefield: Minefield, row: number, col: number): CellInfo {
+function computeCell(config: GameLayout, minefield: Minefield, row: number, col: number): CellInfo {
 	const x = config.gridXOffset + col * config.cellSize + col * config.cellPadding;
 	const y = config.gridYOffset + row * config.cellSize + row * config.cellPadding;
 	const rect: Rect = {
@@ -479,7 +642,7 @@ function handleCellInput(minesweeper: Minesweeper, input: KeyboardInput, cell: C
 	}
 }
 
-function drawStartText(r: Renderer2d, config: GameConfig) {
+function drawStartText(r: Renderer2d, config: GameLayout) {
 	r.setFont(config.startFont);
 	const text = 'CLICK TO START';
 	let m = r.measureText(text);
@@ -492,7 +655,7 @@ function drawStartText(r: Renderer2d, config: GameConfig) {
 	r.context.globalAlpha = 1;
 }
 
-function drawPausedText(r: Renderer2d, config: GameConfig): void {
+function drawPausedText(r: Renderer2d, config: GameLayout): void {
 	r.setFont(config.startFont);
 	const text = 'PAUSED';
 	const metrics = r.measureText(text);
@@ -506,63 +669,151 @@ function drawPausedText(r: Renderer2d, config: GameConfig): void {
 	r.context.globalAlpha = 1;
 }
 
-type TopbarInputState = {
-	canPause: boolean;
-};
+function handleTopbarInput(state: GameState): void {
+	const { input, layout, sounds } = state;
+	let minesweeper = state.minesweeper;
+	const mouse = input.getMousePosition();
+	const leftMousePressed = input.isPressed('MouseLeft');
 
-function drawTopbar(
-	r: Renderer2d,
-	minesweeper: Minesweeper,
-	config: GameConfig,
-	images: GameImages,
-	inputState: TopbarInputState,
-) {
-	r.context.textBaseline = config.textBaseline;
-	r.context.textAlign = config.textAlign;
-	r.setFont(config.topbarFont);
+	let tooltip = '';
+	state.hoverButtonId = null;
+	state.hoveredDifficultyIndex = -1;
 
-	const pauseButtonRect = getPauseButtonRect(config);
+	if (state.selectingDifficulty) {
+		if (input.isPressed('Escape')) {
+			state.selectingDifficulty = false;
+		} else {
+			if (isInsideRect(mouse, layout.difficulty.panel)) {
+				const index = findHoveredDifficultyIndex(layout.difficulty, mouse);
+				if (index > -1) {
+					tooltip = state.canChangeDifficulty
+						? 'Change grid size'
+						: 'Finish or reset the game to change grid size';
+				}
+				if (index > -1 && state.canChangeDifficulty) {
+					state.hoverButtonId = 'difficulty-panel';
+					state.hoveredDifficultyIndex = index;
+					if (leftMousePressed) {
+						minesweeper = resetMinesweeper(state, gridSizes[index]);
+						state.selectingDifficulty = false;
+					}
+				}
+			} else if (isInsideRect(mouse, layout.topbar.difficulty)) {
+				state.hoverButtonId = 'difficulty-top';
+				tooltip = state.selectingDifficulty ? 'Close (Esc)' : 'Choose grid size';
+				if (leftMousePressed) {
+					void sounds.play('click');
+					state.selectingDifficulty = false;
+				}
+			} else if (leftMousePressed) {
+				// NOTE: Any outside click should lead to closing the difficulty panel.
+				//       We don't consume this click and allow a topbar button to be clicked at the same time.
+				state.selectingDifficulty = false;
+			}
+		}
+	} else {
+		if (isInsideRect(mouse, layout.topbar.difficulty)) {
+			state.hoverButtonId = 'difficulty-top';
+			if (leftMousePressed) {
+				void sounds.play('click');
+				state.selectingDifficulty = true;
+			}
+			tooltip = state.selectingDifficulty ? 'Close (Esc)' : 'Choose grid size';
+		}
+	}
+	if (state.hoverButtonId === 'difficulty-top' && !state.selectingDifficulty && !state.canChangeDifficulty) {
+		tooltip = 'View grid sizes';
+	}
+
+	if (state.canReset) {
+		let smileyClicked = false;
+		if (isInsideRect(mouse, layout.topbar.smiley)) {
+			state.hoverButtonId = 'smiley';
+			tooltip = 'Reset game (R)';
+			if (leftMousePressed) {
+				void sounds.play('click');
+				smileyClicked = true;
+			}
+		}
+		if (smileyClicked || input.isPressed('KeyR')) {
+			minesweeper = resetMinesweeper(state);
+		}
+	}
+
+	if (isGameActive(minesweeper)) {
+		let pauseClicked = false;
+		if (isInsideRect(mouse, layout.topbar.pause)) {
+			state.hoverButtonId = 'pause';
+			if (leftMousePressed) {
+				void sounds.play('click');
+				pauseClicked = true;
+			}
+		}
+		if (pauseClicked || input.isPressed('KeyP')) {
+			minesweeper.paused = !minesweeper.paused;
+		}
+		if (state.hoverButtonId === 'pause') {
+			tooltip = minesweeper.paused ? 'Resume (P)' : 'Pause (P)';
+		}
+
+		let flagClicked = false;
+		if (isInsideRect(mouse, layout.topbar.flag)) {
+			state.hoverButtonId = 'flag';
+			if (leftMousePressed) {
+				void sounds.play('click');
+				flagClicked = true;
+			}
+		}
+		if (flagClicked || input.isPressed('KeyF')) {
+			minesweeper.flagMode = !minesweeper.flagMode;
+		}
+		if (state.hoverButtonId === 'flag') {
+			tooltip = minesweeper.flagMode ? 'Switch to reveal mode (F)' : 'Switch to flag mode (F)';
+		}
+	}
+
+	state.renderer.canvas.title = tooltip;
+	state.debugReveal = DEV && !state.selectingDifficulty && input.isDown('Space');
+}
+
+function drawTopbar(state: GameState) {
+	const { renderer: r, layout, minesweeper, images } = state;
+	r.context.textBaseline = layout.textBaseline;
+	r.context.textAlign = layout.textAlign;
+	r.setFont(layout.topbarFont);
+
 	drawTopbarClockSection(r, {
-		minesweeper,
-		config,
-		images,
-		rect: {
-			x: config.gridXOffset,
-			y: config.topbarYOffset,
-			width: pauseButtonRect.x - config.gridXOffset - config.topbarGap,
-			height: config.topbarHeight,
-		},
+		minesweeper: minesweeper,
+		config: layout,
+		images: state.images,
+		rect: layout.topbar.time,
 	});
 	drawTopbarPauseButton(r, {
-		rect: pauseButtonRect,
+		rect: layout.topbar.pause,
 		paused: minesweeper.paused,
-		enabled: inputState.canPause,
-		showIcon: minesweeper.generated,
+		showIcon: isGameActive(minesweeper),
+	});
+	drawTopbarDifficultyButton(r, {
+		rect: layout.topbar.difficulty,
+		selectingDifficulty: state.selectingDifficulty,
 	});
 	drawTopbarSmileyButton(r, {
-		rect: getSmileyBlockRect(config),
-		config,
+		rect: layout.topbar.smiley,
+		config: layout,
 		minesweeper,
 		images,
 	});
-	const flagModeButtonRect = getFlagModeButtonRect(config);
 	drawTopbarFlagModeButton(r, {
-		rect: flagModeButtonRect,
+		rect: layout.topbar.flag,
 		images: images,
 		isFlagMode: minesweeper.flagMode,
-		showIcon: minesweeper.generated,
+		showIcon: isGameActive(minesweeper),
 	});
-	const minesX = flagModeButtonRect.x + flagModeButtonRect.width + config.topbarGap;
 	drawTopbarMinesSection(r, {
-		config,
+		config: layout,
 		images,
 		minesweeper,
-		rect: {
-			x: minesX,
-			y: config.topbarYOffset,
-			width: config.gridXOffset + config.gridWidth - minesX,
-			height: config.topbarHeight,
-		},
+		rect: layout.topbar.mines,
 	});
 }
 
@@ -571,7 +822,7 @@ function drawTopbarClockSection(
 	options: {
 		rect: Rect;
 		minesweeper: Minesweeper;
-		config: GameConfig;
+		config: GameLayout;
 		images: GameImages;
 	},
 ) {
@@ -581,7 +832,11 @@ function drawTopbarClockSection(
 	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.TIME_BG);
 
 	if (time > 0) {
-		const iconX = config.gridXOffset + config.topbarPaddingX;
+		r.context.save();
+		r.context.beginPath();
+		r.context.rect(rect.x, rect.y, rect.width, rect.height);
+		r.context.clip();
+		const iconX = config.topbar.time.x + config.topbarPaddingX;
 		const iconY = rect.y + rect.height / 2 - config.topbarIconSize / 2;
 		r.drawImage(images.clock, iconX, iconY, config.topbarIconSize, config.topbarIconSize);
 
@@ -591,29 +846,27 @@ function drawTopbarClockSection(
 		const ascentDiff = textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent;
 		const textY = topbarYCenter + ascentDiff / 2;
 		r.drawText(text, { x: textX, y: textY }, Color.TEXT_TOPBAR);
+		r.context.restore();
 	}
 }
 
 function drawTopbarPauseButton(
 	r: Renderer2d,
-	options: {
+	props: {
 		rect: Rect;
 		paused: boolean;
-		enabled: boolean;
 		showIcon: boolean;
 	},
 ): void {
-	const { rect, paused, enabled, showIcon } = options;
+	const { rect, paused, showIcon } = props;
 	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.NUMBER2_BG);
 	if (!showIcon) return;
 
-	r.context.globalAlpha = enabled ? 1 : 0.35;
 	if (paused) {
-		drawResumeIcon(r, rect, Color.CELL_TEXT);
+		drawResumeIcon(r, rect, Color.TEXT);
 	} else {
-		drawPauseIcon(r, rect, Color.CELL_TEXT);
+		drawPauseIcon(r, rect, Color.TEXT);
 	}
-	r.context.globalAlpha = 1;
 }
 
 function drawResumeIcon(r: Renderer2d, rect: Rect, color: string): void {
@@ -638,7 +891,7 @@ function drawTopbarSmileyButton(
 	r: Renderer2d,
 	options: {
 		rect: Rect;
-		config: GameConfig;
+		config: GameLayout;
 		minesweeper: Minesweeper;
 		images: GameImages;
 	},
@@ -680,41 +933,11 @@ function drawTopbarFlagModeButton(
 	r.drawImage(image, rect.x + (rect.width - iconSize) / 2, rect.y + (rect.height - iconSize) / 2, iconSize, iconSize);
 }
 
-function getSmileyBlockRect(config: GameConfig): Rect {
-	const size = config.topbarHeight;
-	return {
-		x: config.gridXOffset + config.gridWidth / 2 - size / 2,
-		y: config.topbarYOffset + config.topbarHeight / 2 - size / 2,
-		width: size,
-		height: size,
-	};
-}
-
-function getPauseButtonRect(config: GameConfig): Rect {
-	const smileyRect = getSmileyBlockRect(config);
-	return {
-		x: smileyRect.x - config.topbarGap - config.topbarHeight,
-		y: config.topbarYOffset,
-		width: config.topbarHeight,
-		height: config.topbarHeight,
-	};
-}
-
-function getFlagModeButtonRect(config: GameConfig): Rect {
-	const smileyRect = getSmileyBlockRect(config);
-	return {
-		x: smileyRect.x + smileyRect.width + config.topbarGap,
-		y: config.topbarYOffset,
-		width: config.topbarHeight,
-		height: config.topbarHeight,
-	};
-}
-
 function drawTopbarMinesSection(
 	r: Renderer2d,
 	options: {
 		rect: Rect;
-		config: GameConfig;
+		config: GameLayout;
 		images: GameImages;
 		minesweeper: Minesweeper;
 	},
@@ -741,28 +964,29 @@ function drawPausedCell(r: Renderer2d, cell: CellInfo): void {
 	r.drawRectRounded(cell.rect, CELL_RADIUS, Color.CELL_EMPTY);
 }
 
-function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, cell: CellInfo): void {
+function drawCell(state: GameState, cell: CellInfo): void {
+	const { minesweeper, layout, renderer: r, images, debugReveal } = state;
 	let cellColor = Color.CELL;
 	const value = minesweeper.field.data[cell.row][cell.col];
-	if (cell.flagged && !config.debugReveal) {
+	if (cell.flagged && !debugReveal) {
 		if (cell.hovered) {
 			cellColor = Color.CELL_HOVER;
 		}
-		if ((minesweeper.done || config.debugReveal) && value !== MINE) {
+		if ((minesweeper.done || debugReveal) && value !== MINE) {
 			cellColor = Color.CELL_WRONG;
 		}
 		r.drawRectRounded(cell.rect, CELL_RADIUS, cellColor);
-		r.drawImage(config.images.flag, cell.x, cell.y, config.cellSize, config.cellSize);
-	} else if (value === MINE && (minesweeper.done || config.debugReveal || cell.hinted)) {
+		r.drawImage(state.images.flag, cell.x, cell.y, layout.cellSize, layout.cellSize);
+	} else if (value === MINE && (minesweeper.done || debugReveal || cell.hinted)) {
 		if (cell.revealed) {
 			cellColor = Color.CELL_EXPLODED;
 		} else {
 			cellColor = Color.CELL_EMPTY;
 		}
 		r.drawRectRounded(cell.rect, CELL_RADIUS, cellColor);
-		const image = minesweeper.done && cell.revealed ? config.images.mineExploded : config.images.mine;
-		r.drawImage(image, cell.x, cell.y, config.cellSize, config.cellSize);
-	} else if (cell.revealed || config.debugReveal || cell.hinted) {
+		const image = minesweeper.done && cell.revealed ? images.mineExploded : images.mine;
+		r.drawImage(image, cell.x, cell.y, layout.cellSize, layout.cellSize);
+	} else if (cell.revealed || debugReveal || cell.hinted) {
 		if (value === NONE) {
 			r.drawRectRounded(cell.rect, CELL_RADIUS, Color.CELL_EMPTY);
 		} else {
@@ -790,27 +1014,6 @@ function drawCell(r: Renderer2d, config: GameConfig, minesweeper: Minesweeper, c
 	// 	if (cell.flagged) text = 'F';
 	// 	r.drawText(text, cell.center, '#fff');
 	// }
-}
-
-function initColors(): void {
-	setColors(getComputedStyle(document.documentElement));
-	if (import.meta.hot) {
-		import.meta.hot.on('vite:afterUpdate', () => {
-			console.debug('Styles hot reloaded');
-			setColors(getComputedStyle(document.documentElement));
-		});
-	}
-}
-
-function setColors(styles: CSSStyleDeclaration): void {
-	for (const [colorName, varName] of Object.entries(ColorVar)) {
-		const colorValue = styles.getPropertyValue(varName);
-		if (colorValue) {
-			Color[colorName as keyof typeof Color] = colorValue;
-		} else {
-			console.warn(`Color "${colorName}" not found for "${varName}"`);
-		}
-	}
 }
 
 // [N, NE, E, SE, S, SW, W, NW]

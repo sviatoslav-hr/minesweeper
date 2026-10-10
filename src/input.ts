@@ -1,14 +1,6 @@
 // PERF: It might not be the very efficient to use string every time to check
 
-import {
-	v2Clone,
-	v2Max,
-	v2Min,
-	v2Set,
-	v2SetFrom,
-	v2Sub,
-	type Vec2,
-} from '$math';
+import { v2Clone, v2SetFrom, v2Sub, type Vec2 } from '$math';
 
 // if the button is pressed. Could be better to use a number even a number flag.
 export type KeyCode =
@@ -73,7 +65,9 @@ export type KeyCode =
 	| 'ArrowDown'
 	| 'MouseLeft'
 	| 'MouseMiddle'
-	| 'MouseRight';
+	| 'MouseRight'
+	| 'Mouse4'
+	| 'Mouse5';
 
 export type KeysState = Partial<Record<KeyCode, boolean>>;
 export type KeyHandler = (event: Event, code: KeyCode) => void;
@@ -88,6 +82,7 @@ export interface MouseState {
 export class KeyboardInput {
 	private currentPressed: KeysState = {};
 	private previousPressed: KeysState = {};
+	private pressesThisTick = new Set<KeyCode>();
 	private mouse: MouseState = {
 		currentPosition: { x: 0, y: 0 },
 		previousPosition: { x: 0, y: 0 },
@@ -96,7 +91,7 @@ export class KeyboardInput {
 	};
 
 	isPressed(code: KeyCode): boolean {
-		return !this.previousPressed[code] && !!this.currentPressed[code];
+		return this.pressesThisTick.has(code);
 	}
 
 	isDown(code: KeyCode): boolean {
@@ -125,10 +120,7 @@ export class KeyboardInput {
 	}
 
 	getMouseDelta(): Vec2 {
-		return v2Sub(
-			v2Clone(this.mouse.previousPosition),
-			this.mouse.currentPosition,
-		);
+		return v2Sub(v2Clone(this.mouse.previousPosition), this.mouse.currentPosition);
 	}
 
 	getMouseWheelDelta(): number {
@@ -144,79 +136,65 @@ export class KeyboardInput {
 		this.setReleased(code);
 	};
 	readonly handleMouseDown = (ev: MouseEvent) => {
-		switch (ev.button) {
-			case 0:
-				this.setPressed('MouseLeft');
-				break;
-			case 1:
-				this.setPressed('MouseMiddle');
-				break;
-			case 2:
-				this.setPressed('MouseRight');
-				break;
-		}
+		const code = mouseKeyCode(ev.button);
+		if (code != null) this.setPressed(code);
 	};
 	readonly handleMouseUp = (ev: MouseEvent) => {
-		switch (ev.button) {
-			case 0:
-				this.setReleased('MouseLeft');
-				break;
-			case 1:
-				this.setReleased('MouseMiddle');
-				break;
-			case 2:
-				this.setReleased('MouseRight');
-				break;
-		}
+		const code = mouseKeyCode(ev.button);
+		if (code != null) this.setReleased(code);
 	};
-	readonly handleMouseMove = (ev: MouseEvent, mouseElement?: HTMLElement) => {
-		if (!mouseElement) {
-			if (ev.target instanceof HTMLElement) {
-				mouseElement = ev.target;
-			} else {
-				this.mouse.currentPosition.x = ev.clientX;
-				this.mouse.currentPosition.y = ev.clientY;
-				return;
-			}
-		}
-		// NOTE: We need a specific element just in case there are other elements on top
-		//       and we want mouse to be handled only for this specific element.
-		const x = ev.clientX - mouseElement.offsetLeft;
-		const y = ev.clientY - mouseElement.offsetTop;
-		v2Min(
-			v2Max(v2Set(this.mouse.currentPosition, x, y), 0, 0),
-			mouseElement.offsetWidth,
-			mouseElement.offsetHeight,
-		);
+	readonly handleMouseMove = (ev: MouseEvent, canvas: HTMLCanvasElement) => {
+		const rect = canvas.getBoundingClientRect();
+		this.mouse.currentPosition.x = ((ev.clientX - rect.left) * canvas.width) / rect.width;
+		this.mouse.currentPosition.y = ((ev.clientY - rect.top) * canvas.height) / rect.height;
 	};
 	readonly handleWheel = (ev: WheelEvent) => {
 		this.mouse.currentWheenDelta = ev.deltaY;
 	};
 
-	listen(element: HTMLElement, mouseElement: HTMLElement = element) {
+	listen(element: HTMLElement, canvas: HTMLCanvasElement) {
 		element.addEventListener('keydown', this.handleKeyDown);
-		// FIXME: If between ticks happen both keydown and keyup events, the keypress will be missed
 		element.addEventListener('keyup', this.handleKeyUp);
-		element.addEventListener('mousedown', this.handleMouseDown);
+		element.addEventListener('mousedown', (ev) => {
+			this.handleMouseMove(ev, canvas);
+			this.handleMouseDown(ev);
+		});
 		element.addEventListener('mouseup', this.handleMouseUp);
-		element.addEventListener('mousemove', (ev) =>
-			this.handleMouseMove(ev, mouseElement),
-		);
+		element.addEventListener('mousemove', (ev) => this.handleMouseMove(ev, canvas));
 		element.addEventListener('wheel', this.handleWheel);
 	}
 
 	nextTick() {
 		this.previousPressed = { ...this.currentPressed };
+		this.pressesThisTick.clear();
 		v2SetFrom(this.mouse.previousPosition, this.mouse.currentPosition);
 		this.mouse.previousWheelDelta = this.mouse.currentWheenDelta;
 		this.mouse.currentWheenDelta = 0;
 	}
 
 	private setPressed(code: KeyCode) {
+		if (!this.currentPressed[code]) this.pressesThisTick.add(code);
 		this.currentPressed[code] = true;
 	}
 
 	private setReleased(code: KeyCode) {
 		this.currentPressed[code] = false;
+	}
+}
+
+function mouseKeyCode(button: number): KeyCode | null {
+	switch (button) {
+		case 0:
+			return 'MouseLeft';
+		case 1:
+			return 'MouseMiddle';
+		case 2:
+			return 'MouseRight';
+		case 3:
+			return 'Mouse4';
+		case 4:
+			return 'Mouse5';
+		default:
+			return null;
 	}
 }
