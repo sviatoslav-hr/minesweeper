@@ -1,5 +1,5 @@
-import { isInsideRect, v2Clone, type Rect, type Vec2 } from '$math';
-import { Color, initColors } from './colors';
+import { isInsideRect, v2Add, v2Clone, v2Scale, type Rect, type Vec2 } from '$math';
+import { Color, getTheme, initColors, toggleTheme } from './colors';
 import { KeyboardInput } from './input';
 import { Random } from './random';
 import { Renderer2d, type FontRendered } from './renderer';
@@ -8,10 +8,10 @@ import './style.css';
 
 /*
 TODO:
+- PERF: Draw all necessary images on a hidden canvas once and copy them to the main canvas.
 - Add a mute button (and key).
 - Add a scoreboard.
 - Allow optionally specifying the seed for minefield generation in the URL.
-- Add a second "theme" where number color is displayed as text instead of a background.
 - If screen is vertical, rotate the board.
 - PERF: Change array to be index based instead of 2d array.
 - TODO: Rename Flag to Mark and functions to markFlagged, etc
@@ -36,7 +36,6 @@ type GameState = {
 	renderer: Renderer2d;
 	input: KeyboardInput;
 	sounds: SoundManager;
-	images: GameImages;
 	debugReveal: boolean;
 };
 
@@ -109,8 +108,6 @@ async function main(): Promise<void> {
 	const input = new KeyboardInput();
 	input.listen(document.body, renderer.context.canvas);
 
-	const images = await loadImages();
-
 	const state: GameState = {
 		minesweeper: savedMinesweeper,
 		selectingDifficulty: false,
@@ -121,7 +118,6 @@ async function main(): Promise<void> {
 		renderer: renderer,
 		input: input,
 		sounds: sounds,
-		images: images,
 		isAnyHovered: false,
 		hoverButtonId: null,
 		debugReveal: false,
@@ -312,8 +308,8 @@ function persistMinesweeper(game: Minesweeper): void {
 	}
 }
 
-type TopbarLayout = Record<'time' | 'pause' | 'difficulty' | 'smiley' | 'flag' | 'mines', Rect>;
-type ButtonId = 'pause' | 'difficulty-top' | 'smiley' | 'flag' | 'difficulty-panel';
+type TopbarLayout = Record<'time' | 'pause' | 'difficulty' | 'smiley' | 'flag' | 'theme' | 'mines', Rect>;
+type ButtonId = 'pause' | 'difficulty-top' | 'smiley' | 'flag' | 'theme' | 'difficulty-panel';
 
 type GameLayout = {
 	layoutKey: string;
@@ -356,8 +352,6 @@ function computeLayout(canvas: HTMLCanvasElement, size: GridSize): GameLayout {
 
 	const topbarHeight = shortestCanvasSide * TOPBAR_HEIGHT;
 	const topbarGap = outerPadding;
-	const topbarWidth = canvas.width - topbarGap * 2;
-	const topbarXOffset = topbarGap;
 	const topbarYOffset = topbarGap;
 	const topbarPaddingX = topbarHeight * 0.1;
 	const topbarFont: FontRendered = { size: topbarHeight * 0.8, weight: 700, family: 'Arial' };
@@ -378,22 +372,27 @@ function computeLayout(canvas: HTMLCanvasElement, size: GridSize): GameLayout {
 	const gridXOffset = (canvas.width - gridWidth) / 2;
 	const gridYOffset = topbarYOffset + topbarHeight + outerPadding;
 
+	const topbarXOffset = gridXOffset;
+	const topbarWidth = gridWidth;
+
 	const startFont: FontRendered = { size: gridHeight * 0.15, weight: 700, family: 'Arial' };
 	const square = (x: number): Rect => ({ x, y: topbarYOffset, width: topbarHeight, height: topbarHeight });
 	const smiley = square(gridXOffset + gridWidth / 2 - topbarHeight / 2);
 	const difficulty = square(smiley.x - topbarHeight - topbarGap);
 	const pause = square(difficulty.x - topbarHeight - topbarGap);
-	const flag = square(smiley.x + topbarHeight + topbarGap);
+	const theme = square(smiley.x + topbarHeight + topbarGap);
+	const flag = square(theme.x + topbarHeight + topbarGap);
 	const minesX = flag.x + topbarHeight + topbarGap;
 	const topbar: TopbarLayout = {
 		smiley,
 		difficulty,
 		pause,
 		flag,
+		theme,
 		time: {
-			x: topbarGap,
+			x: topbarXOffset,
 			y: topbarYOffset,
-			width: Math.max(0, pause.x - topbarGap - topbarGap),
+			width: Math.max(0, pause.x - topbarXOffset - topbarGap),
 			height: topbarHeight,
 		},
 		mines: { x: minesX, y: topbarYOffset, width: topbarXOffset + topbarWidth - minesX, height: topbarHeight },
@@ -460,13 +459,15 @@ function drawTopbarDifficultyButton(
 	props: {
 		rect: Rect;
 		selectingDifficulty: boolean;
+		bgColor: string;
+		fgColor: string;
 	},
 ): void {
-	r.drawRectRounded(props.rect, TOPBAR_RADIUS, Color.NUMBER2_BG);
+	r.drawRectRounded(props.rect, TOPBAR_RADIUS, props.bgColor);
 	if (props.selectingDifficulty) {
-		drawCrossIcon(r, props.rect, Color.TEXT);
+		drawCrossIcon(r, props.rect, props.fgColor);
 	} else {
-		drawCellsIcon(r, props.rect, Color.TEXT);
+		drawCellsIcon(r, props.rect, props.fgColor);
 	}
 }
 
@@ -514,10 +515,17 @@ function drawDifficultySelectionPanel(state: GameState): void {
 	for (const [index, choiceRect] of choices.entries()) {
 		const size = gridSizes[index];
 		const selected = size.rows === field.rows && size.cols === field.cols;
-		let color = Color.DIFFICULTY_ITEM;
-		if (selected) color = Color.DIFFICULTY_SELECTED;
-		else if (state.canChangeDifficulty && state.hoveredDifficultyIndex === index) color = Color.DIFFICULTY_HOVER;
-		r.drawRectRounded(choiceRect, 4, color);
+		const hovered = state.canChangeDifficulty && state.hoveredDifficultyIndex === index;
+		let bgColor = Color.DIFFICULTY_ITEM_BG;
+		let fgColor = Color.DIFFICULTY_ITEM_FG;
+		if (selected) {
+			bgColor = Color.DIFFICULTY_ITEM_SELECTED_BG;
+			fgColor = Color.DIFFICULTY_ITEM_SELECTED_FG;
+		} else if (hovered) {
+			bgColor = Color.DIFFICULTY_ITEM_HOVER_BG;
+			fgColor = Color.DIFFICULTY_ITEM_HOVER_FG;
+		}
+		r.drawRectRounded(choiceRect, 4, bgColor);
 		const text = `${size.cols}×${size.rows}`;
 		const metrics = r.measureText(text);
 		r.drawText(
@@ -529,7 +537,7 @@ function drawDifficultySelectionPanel(state: GameState): void {
 					choiceRect.height / 2 +
 					(metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2,
 			},
-			Color.TEXT,
+			fgColor,
 		);
 	}
 	context.restore();
@@ -650,9 +658,7 @@ function drawStartText(r: Renderer2d, config: GameLayout) {
 	let x = config.gridXOffset + config.gridWidth / 2;
 	const ascentDiff = m.actualBoundingBoxAscent - m.actualBoundingBoxDescent;
 	textY += ascentDiff / 2;
-	r.context.globalAlpha = 0.5;
-	r.drawText(text, { x, y: textY }, Color.TEXT_TOPBAR);
-	r.context.globalAlpha = 1;
+	r.drawText(text, { x, y: textY }, Color.TEXT_OVERLAY);
 }
 
 function drawPausedText(r: Renderer2d, config: GameLayout): void {
@@ -664,9 +670,7 @@ function drawPausedText(r: Renderer2d, config: GameLayout): void {
 		y: config.gridYOffset + config.gridHeight / 2,
 	};
 	position.y += (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
-	r.context.globalAlpha = 0.5;
-	r.drawText(text, position, Color.TEXT_TOPBAR);
-	r.context.globalAlpha = 1;
+	r.drawText(text, position, Color.TEXT_OVERLAY);
 }
 
 function handleTopbarInput(state: GameState): void {
@@ -772,12 +776,25 @@ function handleTopbarInput(state: GameState): void {
 		}
 	}
 
+	let themeClicked = false;
+	if (isInsideRect(mouse, layout.topbar.theme)) {
+		state.hoverButtonId = 'theme';
+		themeClicked = leftMousePressed;
+	}
+	if (themeClicked || input.isPressed('KeyT')) {
+		void sounds.play('click');
+		toggleTheme();
+	}
+	if (state.hoverButtonId === 'theme') {
+		tooltip = getTheme() === 'light' ? 'Switch to dark theme (T)' : 'Switch to light theme (T)';
+	}
+
 	state.renderer.canvas.title = tooltip;
 	state.debugReveal = DEV && !state.selectingDifficulty && input.isDown('Space');
 }
 
 function drawTopbar(state: GameState) {
-	const { renderer: r, layout, minesweeper, images } = state;
+	const { renderer: r, layout, minesweeper } = state;
 	r.context.textBaseline = layout.textBaseline;
 	r.context.textAlign = layout.textAlign;
 	r.setFont(layout.topbarFont);
@@ -785,35 +802,48 @@ function drawTopbar(state: GameState) {
 	drawTopbarClockSection(r, {
 		minesweeper: minesweeper,
 		config: layout,
-		images: state.images,
 		rect: layout.topbar.time,
+		fgColor: Color.TIME_FG,
+		bgColor: Color.TIME_BG,
 	});
 	drawTopbarPauseButton(r, {
 		rect: layout.topbar.pause,
 		paused: minesweeper.paused,
 		showIcon: isGameActive(minesweeper),
+		fgColor: Color.PAUSE_FG,
+		bgColor: Color.PAUSE_BG,
 	});
 	drawTopbarDifficultyButton(r, {
 		rect: layout.topbar.difficulty,
 		selectingDifficulty: state.selectingDifficulty,
+		fgColor: Color.DIFFICULTY_FG,
+		bgColor: Color.DIFFICULTY_BG,
 	});
 	drawTopbarSmileyButton(r, {
 		rect: layout.topbar.smiley,
 		config: layout,
 		minesweeper,
-		images,
+		fgColor: Color.SMILEY_FG,
+		bgColor: Color.SMILEY_BG,
+	});
+	drawTopbarThemeButton(r, {
+		rect: layout.topbar.theme,
+		fgColor: Color.THEME_FG,
+		bgColor: Color.THEME_BG,
 	});
 	drawTopbarFlagModeButton(r, {
 		rect: layout.topbar.flag,
-		images: images,
 		isFlagMode: minesweeper.flagMode,
 		showIcon: isGameActive(minesweeper),
+		fgColor: Color.FLAG_FG,
+		bgColor: Color.FLAG_BG,
 	});
 	drawTopbarMinesSection(r, {
 		config: layout,
-		images,
 		minesweeper,
 		rect: layout.topbar.mines,
+		fgColor: Color.MINES_FG,
+		bgColor: Color.MINES_BG,
 	});
 }
 
@@ -823,31 +853,78 @@ function drawTopbarClockSection(
 		rect: Rect;
 		minesweeper: Minesweeper;
 		config: GameLayout;
-		images: GameImages;
+		bgColor: string;
+		fgColor: string;
 	},
 ) {
-	const { rect, minesweeper, config, images } = options;
+	const { rect, minesweeper, config, bgColor, fgColor } = options;
 	const time = minesweeper.generated ? minesweeper.time : 0;
 	const topbarYCenter = config.topbarYOffset + config.topbarHeight / 2;
-	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.TIME_BG);
+	r.drawRectRounded(rect, TOPBAR_RADIUS, bgColor);
 
 	if (time > 0) {
 		r.context.save();
 		r.context.beginPath();
 		r.context.rect(rect.x, rect.y, rect.width, rect.height);
 		r.context.clip();
-		const iconX = config.topbar.time.x + config.topbarPaddingX;
-		const iconY = rect.y + rect.height / 2 - config.topbarIconSize / 2;
-		r.drawImage(images.clock, iconX, iconY, config.topbarIconSize, config.topbarIconSize);
+		const iconRect: Rect = {
+			x: config.topbar.time.x + config.topbarPaddingX,
+			y: rect.y + rect.height / 2 - config.topbarIconSize / 2,
+			width: config.topbarIconSize,
+			height: config.topbarIconSize,
+		};
+		drawClockIcon(r, iconRect, fgColor, time);
 
 		const text = timeToHumanString(time);
 		const textMetrics = r.measureText(text);
-		const textX = iconX + config.topbarIconSize + config.topbarPaddingX + textMetrics.width / 2;
+		const textX = iconRect.x + config.topbarIconSize + config.topbarPaddingX + textMetrics.width / 2;
 		const ascentDiff = textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent;
 		const textY = topbarYCenter + ascentDiff / 2;
-		r.drawText(text, { x: textX, y: textY }, Color.TEXT_TOPBAR);
+		r.drawText(text, { x: textX, y: textY }, fgColor);
 		r.context.restore();
 	}
+}
+
+function drawClockIcon(r: Renderer2d, rect: Rect, color: string, time: number): void {
+	const lineThiccness = Math.min(rect.width, rect.height) * 0.1;
+	const center: Vec2 = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+	center.y += lineThiccness / 2;
+	const radius = Math.min(rect.width, rect.height) / 2 - lineThiccness * 1.5;
+	r.drawCircleOutline(center, radius, color, lineThiccness);
+	const secondsAngle = ((time % 60_000) / 60_000) * Math.PI * 2 - Math.PI / 2;
+	const minutesAngle = ((time % 3_600_000) / 3_600_000) * Math.PI * 2 - Math.PI / 2;
+	const secondsHandLength = radius * 0.75 - lineThiccness / 2;
+	const minutesHandLength = radius * 0.5 - lineThiccness / 2;
+	r.drawLine(
+		center,
+		{
+			x: center.x + Math.cos(minutesAngle) * minutesHandLength,
+			y: center.y + Math.sin(minutesAngle) * minutesHandLength,
+		},
+		color,
+		lineThiccness,
+		'round',
+	);
+	r.drawLine(
+		center,
+		{
+			x: center.x + Math.cos(secondsAngle) * secondsHandLength,
+			y: center.y + Math.sin(secondsAngle) * secondsHandLength,
+		},
+		color,
+		lineThiccness,
+		'round',
+	);
+	const topLineY = rect.y + (center.y - radius - rect.y) / 2 + 1;
+	const topLineCenterX = rect.x + rect.width / 2;
+	const topLineLength = rect.width * 0.2;
+	r.drawLine(
+		{ x: topLineCenterX - topLineLength + lineThiccness / 2, y: topLineY },
+		{ x: topLineCenterX + topLineLength - lineThiccness / 2, y: topLineY },
+		color,
+		lineThiccness,
+		'round',
+	);
 }
 
 function drawTopbarPauseButton(
@@ -856,16 +933,18 @@ function drawTopbarPauseButton(
 		rect: Rect;
 		paused: boolean;
 		showIcon: boolean;
+		bgColor: string;
+		fgColor: string;
 	},
 ): void {
-	const { rect, paused, showIcon } = props;
-	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.NUMBER2_BG);
+	const { rect, paused, showIcon, bgColor, fgColor } = props;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, bgColor);
 	if (!showIcon) return;
 
 	if (paused) {
-		drawResumeIcon(r, rect, Color.TEXT);
+		drawResumeIcon(r, rect, fgColor);
 	} else {
-		drawPauseIcon(r, rect, Color.TEXT);
+		drawPauseIcon(r, rect, fgColor);
 	}
 }
 
@@ -893,17 +972,16 @@ function drawTopbarSmileyButton(
 		rect: Rect;
 		config: GameLayout;
 		minesweeper: Minesweeper;
-		images: GameImages;
+		bgColor: string;
+		fgColor: string;
 	},
 ): void {
-	const { rect, config, minesweeper, images } = options;
-	let image: HTMLImageElement | undefined;
+	const { rect, config, minesweeper, bgColor, fgColor } = options;
+	let kind: SmileyKind = 'smile';
 	if (minesweeper.generated && minesweeper.done) {
-		image = minesweeper.failed ? images.smileyDead : images.smileyCool;
-	} else {
-		image = images.smiley;
+		kind = minesweeper.failed ? 'dead' : 'cool';
 	}
-	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.SMILEY_BG);
+	r.drawRectRounded(rect, TOPBAR_RADIUS, bgColor);
 	const paddingX = (rect.width - config.topbarIconSize) / 2;
 	const paddingY = (rect.height - config.topbarIconSize) / 2;
 	const smileyIconRect: Rect = {
@@ -912,25 +990,234 @@ function drawTopbarSmileyButton(
 		width: config.topbarIconSize,
 		height: config.topbarIconSize,
 	};
-	r.drawImage(image, smileyIconRect.x, smileyIconRect.y, smileyIconRect.width, smileyIconRect.height);
+	drawSmileyIcon(r, smileyIconRect, fgColor, kind, bgColor);
+}
+
+type SmileyKind = 'smile' | 'dead' | 'cool';
+
+function drawSmileyIcon(r: Renderer2d, rect: Rect, color: string, kind: SmileyKind, highlightColor = '#fff'): void {
+	const center: Vec2 = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+	const smallestSide = Math.min(rect.width, rect.height);
+	const lineThiccness = smallestSide * 0.1;
+	const radius = smallestSide / 2 - lineThiccness / 2;
+	r.drawCircleOutline(center, radius, color, lineThiccness);
+
+	if (kind === 'dead') {
+		const eyeY = center.y - smallestSide * 0.14;
+		const eyeHalfSize = smallestSide * 0.085;
+		for (const side of [-1, 1]) {
+			const eyeX = center.x + side * smallestSide * 0.17;
+			r.drawLine(
+				{ x: eyeX - eyeHalfSize, y: eyeY - eyeHalfSize },
+				{ x: eyeX + eyeHalfSize, y: eyeY + eyeHalfSize },
+				color,
+				smallestSide * 0.035,
+				'round',
+			);
+			r.drawLine(
+				{ x: eyeX - eyeHalfSize, y: eyeY + eyeHalfSize },
+				{ x: eyeX + eyeHalfSize, y: eyeY - eyeHalfSize },
+				color,
+				smallestSide * 0.035,
+				'round',
+			);
+		}
+
+		const mouthLeft = center.x - smallestSide * 0.21;
+		const mouthRight = center.x + smallestSide * 0.21;
+		const mouthY = center.y + smallestSide * 0.23;
+		r.context.fillStyle = color;
+		r.context.beginPath();
+		r.context.moveTo(mouthLeft, mouthY);
+		r.context.bezierCurveTo(
+			mouthLeft,
+			center.y + smallestSide * 0.13,
+			center.x - smallestSide * 0.12,
+			center.y + smallestSide * 0.06,
+			center.x,
+			center.y + smallestSide * 0.06,
+		);
+		r.context.bezierCurveTo(
+			center.x + smallestSide * 0.12,
+			center.y + smallestSide * 0.06,
+			mouthRight,
+			center.y + smallestSide * 0.13,
+			mouthRight,
+			mouthY,
+		);
+		r.context.bezierCurveTo(
+			mouthRight,
+			center.y + smallestSide * 0.29,
+			center.x + smallestSide * 0.1,
+			center.y + smallestSide * 0.32,
+			center.x,
+			center.y + smallestSide * 0.32,
+		);
+		r.context.bezierCurveTo(
+			center.x - smallestSide * 0.1,
+			center.y + smallestSide * 0.32,
+			mouthLeft,
+			center.y + smallestSide * 0.29,
+			mouthLeft,
+			mouthY,
+		);
+		r.context.closePath();
+		r.context.fill();
+		return;
+	}
+
+	if (kind === 'cool') {
+		const glassesY = center.y - smallestSide * 0.19;
+		r.drawLine(
+			{ x: center.x - smallestSide * 0.39, y: glassesY },
+			{ x: center.x + smallestSide * 0.39, y: glassesY },
+			color,
+			smallestSide * 0.065,
+			'round',
+		);
+		for (const side of [-1, 1]) {
+			const lensX = center.x + side * smallestSide * 0.195;
+			const lensHalfWidth = smallestSide * 0.175;
+			const lensBottom = center.y + smallestSide * 0.04;
+			r.context.fillStyle = color;
+			r.context.beginPath();
+			r.context.moveTo(lensX - lensHalfWidth, glassesY);
+			r.context.lineTo(lensX + lensHalfWidth, glassesY);
+			r.context.quadraticCurveTo(lensX + lensHalfWidth, lensBottom, lensX, lensBottom);
+			r.context.quadraticCurveTo(lensX - lensHalfWidth, lensBottom, lensX - lensHalfWidth, glassesY);
+			r.context.closePath();
+			r.context.fill();
+
+			r.context.save();
+			r.context.strokeStyle = highlightColor;
+			r.context.globalAlpha *= 0.5;
+			r.context.lineWidth = smallestSide * 0.035;
+			r.context.lineCap = 'round';
+			r.context.beginPath();
+			r.context.moveTo(lensX - smallestSide * 0.12, glassesY + smallestSide * 0.08);
+			r.context.quadraticCurveTo(
+				lensX - smallestSide * 0.125,
+				glassesY + smallestSide * 0.035,
+				lensX - smallestSide * 0.1,
+				glassesY + smallestSide * 0.02,
+			);
+			r.context.stroke();
+			r.context.restore();
+		}
+	} else {
+		const eyeOffsetX = smallestSide * 0.145;
+		const eyeY = center.y - smallestSide * 0.13;
+		const eyeRadius: Vec2 = { x: smallestSide * 0.075, y: smallestSide * 0.115 };
+		r.drawEllipse({ x: center.x - eyeOffsetX, y: eyeY }, eyeRadius, color);
+		r.drawEllipse({ x: center.x + eyeOffsetX, y: eyeY }, eyeRadius, color);
+	}
+
+	const mouthLeft = center.x - smallestSide * 0.23;
+	const mouthRight = center.x + smallestSide * 0.23;
+	const upperY = center.y + smallestSide * 0.11;
+	const lowerY = center.y + smallestSide * 0.14;
+	const upperControlY = center.y + smallestSide * 0.25;
+	const lowerControlY = center.y + smallestSide * 0.39;
+	const tipOffset = smallestSide * 0.03;
+	const tangentScale = tipOffset / (smallestSide * 0.23);
+	const upperTipY = upperY - (upperControlY - upperY) * tangentScale;
+	const lowerTipY = lowerY - (lowerControlY - lowerY) * tangentScale;
+	r.context.fillStyle = color;
+	r.context.beginPath();
+	r.context.moveTo(mouthLeft, upperY);
+	r.context.quadraticCurveTo(center.x, upperControlY, mouthRight, upperY);
+	r.context.bezierCurveTo(mouthRight + tipOffset, upperTipY, mouthRight + tipOffset, lowerTipY, mouthRight, lowerY);
+	r.context.quadraticCurveTo(center.x, lowerControlY, mouthLeft, lowerY);
+	r.context.bezierCurveTo(mouthLeft - tipOffset, lowerTipY, mouthLeft - tipOffset, upperTipY, mouthLeft, upperY);
+	r.context.closePath();
+	r.context.fill();
 }
 
 function drawTopbarFlagModeButton(
 	r: Renderer2d,
 	options: {
 		rect: Rect;
-		images: GameImages;
 		isFlagMode: boolean;
 		showIcon: boolean;
+		bgColor: string;
+		fgColor: string;
 	},
 ): void {
-	const { rect, images, isFlagMode, showIcon } = options;
-	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.NUMBER4_BG);
+	const { rect, isFlagMode, showIcon, bgColor, fgColor } = options;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, bgColor);
 	if (!showIcon) return;
 
 	const iconSize = rect.height * 0.78;
-	const image = isFlagMode ? images.flag : images.mine;
-	r.drawImage(image, rect.x + (rect.width - iconSize) / 2, rect.y + (rect.height - iconSize) / 2, iconSize, iconSize);
+	const imageRect: Rect = {
+		x: rect.x + (rect.width - iconSize) / 2,
+		y: rect.y + (rect.height - iconSize) / 2,
+		width: iconSize,
+		height: iconSize,
+	};
+	if (isFlagMode) {
+		drawFlagIcon(r, imageRect, fgColor);
+	} else {
+		drawMineIcon(r, imageRect, fgColor);
+	}
+}
+
+function drawFlagIcon(r: Renderer2d, rect: Rect, color: string, flagColor = color): void {
+	const scale = 0.8;
+	const size: Vec2 = { x: rect.width * scale, y: rect.height * scale };
+	const padding: Vec2 = { x: (rect.width - size.x) / 2, y: (rect.height - size.y) / 2 };
+	const lineTop: Vec2 = { x: rect.x + rect.width / 2, y: rect.y + padding.y };
+	lineTop.x += size.x * 0.15;
+	const lineBottom = v2Clone(lineTop);
+	lineBottom.y += size.y;
+	const lineThiccness = size.x * 0.1;
+	const standRadius = lineThiccness * 1.2;
+	// NOTE: Need to readjust the line because 'round' makes the rounded line corners outside of the line.
+	lineTop.y += lineThiccness / 2;
+	lineBottom.y -= lineThiccness / 2;
+	lineBottom.y -= standRadius / 2;
+	// TODO: Roundness offset should be handled inside of the draw method.
+	r.drawLine(lineTop, lineBottom, color, lineThiccness, 'round');
+	r.drawCircle(lineTop, (lineThiccness / 2) * 1.2, color);
+	const OFFSET = 1;
+	const flagTop = v2Clone(lineTop);
+	flagTop.x -= lineThiccness / 2 - OFFSET;
+	const flagLeft = v2Clone(lineBottom);
+	flagLeft.y -= size.y * 0.15;
+	flagLeft.x -= lineThiccness / 2 - OFFSET;
+	const flagBottom = v2Clone(flagTop);
+	flagBottom.x -= (flagLeft.y - flagTop.y) / 1.2;
+	flagBottom.y += (flagLeft.y - flagTop.y) / 2;
+	r.drawTriangle(flagTop, flagLeft, flagBottom, flagColor); // '#A6243F'
+	r.drawArc({ x: lineBottom.x, y: lineBottom.y + standRadius }, standRadius, 180, 360, color);
+}
+
+function drawTopbarThemeButton(
+	r: Renderer2d,
+	props: {
+		rect: Rect;
+		bgColor: string;
+		fgColor: string;
+	},
+): void {
+	const { rect, bgColor, fgColor } = props;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, bgColor);
+	const context = r.context;
+	const centerX = rect.x + rect.width / 2;
+	const centerY = rect.y + rect.height / 2;
+	const radius = rect.width * 0.24;
+	const startAngle = getTheme() === 'light' ? Math.PI / 2 : -Math.PI / 2;
+	context.save();
+	context.fillStyle = fgColor;
+	context.strokeStyle = fgColor;
+	context.lineWidth = Math.max(1, rect.width * 0.055);
+	context.beginPath();
+	context.arc(centerX, centerY, radius, startAngle, startAngle + Math.PI);
+	context.closePath();
+	context.fill();
+	context.beginPath();
+	context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+	context.stroke();
+	context.restore();
 }
 
 function drawTopbarMinesSection(
@@ -938,18 +1225,19 @@ function drawTopbarMinesSection(
 	options: {
 		rect: Rect;
 		config: GameLayout;
-		images: GameImages;
 		minesweeper: Minesweeper;
+		bgColor: string;
+		fgColor: string;
 	},
 ): void {
-	const { rect, config, images, minesweeper } = options;
-	r.drawRectRounded(rect, TOPBAR_RADIUS, Color.MINES_BG);
+	const { rect, config, minesweeper, bgColor, fgColor } = options;
+	r.drawRectRounded(rect, TOPBAR_RADIUS, bgColor);
 	if (!minesweeper.generated) return;
 
 	const rightX = rect.x + rect.width;
 	const imageX = rightX - config.topbarIconSize - config.topbarPaddingX;
 	const imageY = rect.y + (rect.height - config.topbarIconSize) / 2;
-	r.drawImage(images.mine, imageX, imageY, config.topbarIconSize, config.topbarIconSize);
+	drawMineIcon(r, { x: imageX, y: imageY, width: config.topbarIconSize, height: config.topbarIconSize }, fgColor);
 
 	const minesRemaining = Math.max(0, minesweeper.field.minesCount - countFlags(minesweeper.field));
 	const text = minesRemaining.toString().padStart(3, '0');
@@ -957,7 +1245,36 @@ function drawTopbarMinesSection(
 	const ascentDiff = textMetrics.actualBoundingBoxAscent - textMetrics.actualBoundingBoxDescent;
 	const textY = rect.y + rect.height / 2 + ascentDiff / 2;
 	const textX = imageX - config.topbarPaddingX - textMetrics.width / 2;
-	r.drawText(text, { x: textX, y: textY }, Color.TEXT_TOPBAR);
+	r.drawText(text, { x: textX, y: textY }, fgColor);
+}
+
+function drawMineIcon(r: Renderer2d, rect: Rect, color: string): void {
+	const center: Vec2 = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+	const scale = 0.65;
+	const radius: Vec2 = { x: (rect.width / 2) * scale, y: (rect.height / 2) * scale };
+	// PERF: Can these separate draw calls be merged into a single one somehow?
+	r.drawEllipse(center, radius, color);
+	const linesCount = 4;
+	const lineLength = (Math.min(rect.width, rect.height) / 2) * 0.8;
+	const lineThiccness = lineLength * 0.2;
+	for (let i = 0; i < linesCount; i++) {
+		const angle = (i * Math.PI) / linesCount;
+		const dx = Math.cos(angle);
+		const dy = Math.sin(angle);
+		const offset = { x: dx * lineLength, y: dy * lineLength };
+		r.drawLine(
+			{ x: center.x - offset.x, y: center.y - offset.y },
+			{ x: center.x + offset.x, y: center.y + offset.y },
+			color,
+			lineThiccness,
+			'round',
+		);
+	}
+	const shineOffset = v2Scale(radius, 0.35);
+	shineOffset.y *= -1;
+	const shineCenter = v2Add(center, shineOffset);
+	const shineRadius = Math.min(radius.x, radius.y) * 0.2;
+	r.drawCircle(shineCenter, shineRadius, '#ffffff7f');
 }
 
 function drawPausedCell(r: Renderer2d, cell: CellInfo): void {
@@ -965,7 +1282,7 @@ function drawPausedCell(r: Renderer2d, cell: CellInfo): void {
 }
 
 function drawCell(state: GameState, cell: CellInfo): void {
-	const { minesweeper, layout, renderer: r, images, debugReveal } = state;
+	const { minesweeper, renderer: r, debugReveal } = state;
 	let cellColor = Color.CELL;
 	const value = minesweeper.field.data[cell.row][cell.col];
 	if (cell.flagged && !debugReveal) {
@@ -976,16 +1293,16 @@ function drawCell(state: GameState, cell: CellInfo): void {
 			cellColor = Color.CELL_WRONG;
 		}
 		r.drawRectRounded(cell.rect, CELL_RADIUS, cellColor);
-		r.drawImage(state.images.flag, cell.x, cell.y, layout.cellSize, layout.cellSize);
+		drawFlagIcon(r, cell.rect, Color.FLAG_HANDLE, Color.FLAG);
 	} else if (value === MINE && (minesweeper.done || debugReveal || cell.hinted)) {
 		if (cell.revealed) {
 			cellColor = Color.CELL_EXPLODED;
 		} else {
-			cellColor = Color.CELL_EMPTY;
+			cellColor = Color.CELL_MINE;
 		}
 		r.drawRectRounded(cell.rect, CELL_RADIUS, cellColor);
-		const image = minesweeper.done && cell.revealed ? images.mineExploded : images.mine;
-		r.drawImage(image, cell.x, cell.y, layout.cellSize, layout.cellSize);
+		const mineColor = minesweeper.done && cell.revealed ? Color.MINE_EXPLODED : Color.MINE_NORMAL;
+		drawMineIcon(r, cell.rect, mineColor);
 	} else if (cell.revealed || debugReveal || cell.hinted) {
 		if (value === NONE) {
 			r.drawRectRounded(cell.rect, CELL_RADIUS, Color.CELL_EMPTY);
@@ -1392,51 +1709,6 @@ function numberToForegroundColor(number: number): string {
 		default:
 			return Color.NUMBER1_FG;
 	}
-}
-
-type GameImages = {
-	flag: HTMLImageElement;
-	mine: HTMLImageElement;
-	mineExploded: HTMLImageElement;
-	clock: HTMLImageElement;
-	smiley: HTMLImageElement;
-	smileyCool: HTMLImageElement;
-	smileyDead: HTMLImageElement;
-};
-
-async function loadImages(): Promise<GameImages> {
-	const flagImage = new Image();
-	flagImage.src = './flag.png';
-	const mineImage = new Image();
-	mineImage.src = './mine.png';
-	const mineExplodedImage = new Image();
-	mineExplodedImage.src = './mine-exploded.png';
-	const clockImage = new Image();
-	clockImage.src = './clock.png';
-	const smileyImage = new Image();
-	smileyImage.src = './smiley.png';
-	const smileyCoolImage = new Image();
-	smileyCoolImage.src = './smiley-cool.png';
-	const smileyDeadImage = new Image();
-	smileyDeadImage.src = './smiley-dead.png';
-	await Promise.all([
-		flagImage.decode(),
-		mineImage.decode(),
-		mineExplodedImage.decode(),
-		clockImage.decode(),
-		smileyImage.decode(),
-		smileyCoolImage.decode(),
-		smileyDeadImage.decode(),
-	]);
-	return {
-		flag: flagImage,
-		mine: mineImage,
-		mineExploded: mineExplodedImage,
-		clock: clockImage,
-		smiley: smileyImage,
-		smileyCool: smileyCoolImage,
-		smileyDead: smileyDeadImage,
-	};
 }
 
 function* neighborIndices(minefield: Minefield, index: number): Generator<number> {

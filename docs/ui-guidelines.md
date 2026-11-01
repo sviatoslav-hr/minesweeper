@@ -4,9 +4,11 @@ These guidelines explain the design choices to preserve as the game changes. The
 
 ## Color and consistency
 
-Use the numbered-cell palette for topbar blocks in left-to-right order, including readouts. Pause and the difficulty selector share green and stay adjacent. Keep each control's position and color stable across game states so players can find it without relearning the topbar.
+Use the light numbered-cell palette for topbar blocks in left-to-right order, including readouts. Pause and the difficulty selector share green and stay adjacent. Flag mode and the theme switch share orange and stay adjacent. Keep each control's position and color stable across game states and themes so players can find it without relearning the topbar.
 
 Reuse the game's existing colors rather than adding unrelated accents. Color supports the icons and labels; it should not be the only way to understand an action. The palette lives in `src/style.css`.
+
+Light keeps the original filled-color cells. Dark puts brighter colors on the numbers and uses the empty-cell color for numbered-cell backgrounds. Keep the board background distinct from cell backgrounds so individual cells remain visible. Keep both themes in CSS and reread the palette when switching, without restarting the round. Remember the theme separately from round progress.
 
 ## Keep the board central
 

@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "build:prod": "tsc && vite build --base /minesweeper/",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --test"
   },
   "devDependencies": {
     "typescript": "~6.0.2",

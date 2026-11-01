@@ -7,7 +7,7 @@ Minesweeper - a browser version of the classic puzzle game. Each minefield is ch
 
 ### Install node modules
 
-Make sure to have __pnpm__ installed.
+Make sure to have **pnpm** installed.
 
 ```bash
 pnpm install

@@ -2,8 +2,14 @@ export type Vec2 = { x: number; y: number };
 export type Rect = { x: number; y: number; width: number; height: number };
 
 // TODO: Try grouping these functions in a scope for convenience.
+export function v2Add(a: Vec2, b: Vec2): Vec2 {
+	return { x: a.x + b.x, y: a.y + b.y };
+}
 export function v2Sub(a: Vec2, b: Vec2): Vec2 {
 	return { x: a.x - b.x, y: a.y - b.y };
+}
+export function v2Scale(a: Vec2, scale: number): Vec2 {
+	return { x: a.x * scale, y: a.y * scale };
 }
 export function v2Min(a: Vec2, x: number, y: number): Vec2 {
 	return { x: Math.min(a.x, x), y: Math.min(a.y, y) };
@@ -24,12 +30,7 @@ export function v2Clone(source: Vec2): Vec2 {
 }
 
 export function isInsideRect(point: Vec2, rect: Rect): boolean {
-	return (
-		point.x >= rect.x &&
-		point.x <= rect.x + rect.width &&
-		point.y >= rect.y &&
-		point.y <= rect.y + rect.height
-	);
+	return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
 }
 
 export function scaleRectCentered(rect: Rect, scale: number): Rect {

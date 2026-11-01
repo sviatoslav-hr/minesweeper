@@ -1,35 +1,122 @@
 :root {
+	--color-palette-1-light: #abd0ff;
+	--color-palette-2-light: #b7e3a5;
+	--color-palette-3-light: #fefeb3;
+	--color-palette-4-light: #ffcda1;
+	--color-palette-5-light: #efa2a2;
+	--color-palette-6-light: #e98fc8;
+	--color-palette-7-light: #c484cf;
+	--color-palette-8-light: #a782d4;
+	--color-palette-1-dark: #202934;
+	--color-palette-2-dark: #202c1b;
+	--color-palette-3-dark: #292919;
+	--color-palette-4-dark: #30261c;
+	--color-palette-5-dark: #372121;
+	--color-palette-6-dark: #381f2e;
+	--color-palette-7-dark: #332037;
+	--color-palette-8-dark: #2c233b;
+
+	--color-text-overlay: #0000007f;
 	--color-bg: #302d30;
 	--color-cell: #c0bdc0;
 	--color-cell-empty: #908a90;
+	--color-cell-mine: var(--color-cell-empty);
 	--color-cell-hover: #dbd9db;
 	--color-cell-wrong: #ff6060;
-	--color-cell-exploded: #fac4c4;
-	--color-cell-text: #242424;
-	--color-text-topbar: #111111;
-	--color-time-bg: #abd0ff;
-	--color-mines-bg: #efa2a2;
-	--color-smiley-bg: #fefeb3;
-	--color-difficulty-item: #c0bdc0;
-	--color-difficulty-hover: #dbd9db;
-	--color-difficulty-selected: #b7e3a5;
+	--color-cell-exploded: #fab4b4;
+	--color-flag: #a6243f;
+	--color-flag-handle: var(--color-bg);
+	--color-mine-normal: #000;
+	--color-mine-exploded: #fb3b02;
 
-	--color-number-1-bg: #abd0ff;
-	--color-number-2-bg: #b7e3a5;
-	--color-number-3-bg: #fefeb3;
-	--color-number-4-bg: #ffcda1;
-	--color-number-5-bg: #efa2a2;
-	--color-number-6-bg: #e98fc8;
-	--color-number-7-bg: #c484cf;
-	--color-number-8-bg: #a782d4;
-	--color-number-1-fg: #242424;
-	--color-number-2-fg: #242424;
-	--color-number-3-fg: #242424;
-	--color-number-4-fg: #242424;
-	--color-number-5-fg: #242424;
-	--color-number-6-fg: #242424;
-	--color-number-7-fg: #242424;
-	--color-number-8-fg: #242424;
+	--color-time-fg: var(--color-palette-1-dark);
+	--color-time-bg: var(--color-palette-1-light);
+	--color-pause-fg: var(--color-palette-2-dark);
+	--color-pause-bg: var(--color-palette-2-light);
+	--color-difficulty-fg: var(--color-palette-2-dark);
+	--color-difficulty-bg: var(--color-palette-2-light);
+	--color-smiley-fg: var(--color-palette-3-dark);
+	--color-smiley-bg: var(--color-palette-3-light);
+	--color-flag-fg: var(--color-palette-4-dark);
+	--color-flag-bg: var(--color-palette-4-light);
+	--color-theme-fg: var(--color-palette-4-dark);
+	--color-theme-bg: var(--color-palette-4-light);
+	--color-mines-fg: var(--color-palette-5-dark);
+	--color-mines-bg: var(--color-palette-5-light);
+
+	--color-difficulty-item-fg: var(--color-number-2-fg);
+	--color-difficulty-item-bg: var(--color-cell);
+	--color-difficulty-item-selected-fg: var(--color-number-2-fg);
+	--color-difficulty-item-selected-bg: var(--color-difficulty-bg);
+	--color-difficulty-item-hover-fg: var(--color-number-2-fg);
+	--color-difficulty-item-hover-bg: var(--color-difficulty-bg);
+
+	--color-number-1-bg: var(--color-palette-1-light);
+	--color-number-2-bg: var(--color-palette-2-light);
+	--color-number-3-bg: var(--color-palette-3-light);
+	--color-number-4-bg: var(--color-palette-4-light);
+	--color-number-5-bg: var(--color-palette-5-light);
+	--color-number-6-bg: var(--color-palette-6-light);
+	--color-number-7-bg: var(--color-palette-7-light);
+	--color-number-8-bg: var(--color-palette-8-light);
+	--color-number-1-fg: var(--color-palette-1-dark);
+	--color-number-2-fg: var(--color-palette-2-dark);
+	--color-number-3-fg: var(--color-palette-3-dark);
+	--color-number-4-fg: var(--color-palette-4-dark);
+	--color-number-5-fg: var(--color-palette-5-dark);
+	--color-number-6-fg: var(--color-palette-6-dark);
+	--color-number-7-fg: var(--color-palette-7-dark);
+	--color-number-8-fg: var(--color-palette-8-dark);
+}
+
+:root[data-theme="dark"] {
+	--color-bg: #191719;
+
+	--color-cell-empty: #2c2a2c;
+	--color-cell: #4f4d4f;
+	--color-cell-hover: #5f5d5f;
+	--color-cell-mine: var(--color-cell-empty);
+	--color-cell-wrong: #5a2f2f;
+	--color-cell-exploded: #5a2f2f;
+
+	--color-flag: #a81f39;
+	--color-flag-handle: #b3b1b3;
+	--color-text-overlay: #f0f0f07f;
+	--color-mine-exploded: #db3b02;
+
+	--color-difficulty-item-fg: var(--color-number-2-fg);
+	--color-difficulty-item-bg: var(--color-cell-empty);
+	--color-difficulty-item-selected-fg: var(--color-palette-2-dark);
+	--color-difficulty-item-selected-bg: var(--color-difficulty-bg);
+	--color-difficulty-item-hover-fg: var(--color-palette-2-dark);
+	--color-difficulty-item-hover-bg: var(--color-difficulty-bg);
+
+	/*--color-number-1-bg: var(--color-palette-1-dark);
+	--color-number-2-bg: var(--color-palette-2-dark);
+	--color-number-3-bg: var(--color-palette-3-dark);
+	--color-number-4-bg: var(--color-palette-4-dark);
+	--color-number-5-bg: var(--color-palette-5-dark);
+	--color-number-6-bg: var(--color-palette-6-dark);
+	--color-number-7-bg: var(--color-palette-7-dark);
+	--color-number-8-bg: var(--color-palette-8-dark);*/
+
+	--color-number-1-bg: var(--color-cell-empty);
+	--color-number-2-bg: var(--color-cell-empty);
+	--color-number-3-bg: var(--color-cell-empty);
+	--color-number-4-bg: var(--color-cell-empty);
+	--color-number-5-bg: var(--color-cell-empty);
+	--color-number-6-bg: var(--color-cell-empty);
+	--color-number-7-bg: var(--color-cell-empty);
+	--color-number-8-bg: var(--color-cell-empty);
+
+	--color-number-1-fg: var(--color-palette-1-light);
+	--color-number-2-fg: var(--color-palette-2-light);
+	--color-number-3-fg: var(--color-palette-3-light);
+	--color-number-4-fg: var(--color-palette-4-light);
+	--color-number-5-fg: var(--color-palette-5-light);
+	--color-number-6-fg: var(--color-palette-6-light);
+	--color-number-7-fg: var(--color-palette-7-light);
+	--color-number-8-fg: var(--color-palette-8-light);
 }
 
 * {
@@ -38,14 +125,19 @@
 	box-sizing: border-box;
 }
 
+html,
+body,
 #app {
-	width: 100%;
-	height: 100%;
-	display: flex;
-	justify-content: center;
-	align-items: center;
+	width: 100vw;
+	height: 100vh;
 }
 
 body {
 	background-color: var(--color-bg);
+}
+
+#app {
+	display: flex;
+	justify-content: center;
+	align-items: center;
 }

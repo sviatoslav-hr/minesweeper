@@ -15,6 +15,8 @@ export type FontRendered = {
 	family: string;
 };
 
+const DEG2RAD = Math.PI / 180;
+
 export class Renderer2d {
 	context: CanvasRenderingContext2D;
 	camera: Camera | null = null;
@@ -56,6 +58,21 @@ export class Renderer2d {
 	fillScreen(color: string) {
 		this.context.fillStyle = color;
 		this.context.fillRect(0, 0, this.canvas.width, this.canvas.height);
+	}
+
+	drawTriangle(v1: Vec2, v2: Vec2, v3: Vec2, color: string): void {
+		this.context.fillStyle = color;
+		if (this.camera) {
+			v1 = this.camera.toScreen2(v1);
+			v2 = this.camera.toScreen2(v2);
+			v3 = this.camera.toScreen2(v3);
+		}
+		this.context.beginPath();
+		this.context.moveTo(v1.x, v1.y);
+		this.context.lineTo(v2.x, v2.y);
+		this.context.lineTo(v3.x, v3.y);
+		this.context.closePath();
+		this.context.fill();
 	}
 
 	drawRect(rect: Rect, color: string): void;
@@ -118,6 +135,58 @@ export class Renderer2d {
 		this.context.strokeRect(rect.x, rect.y, rect.width, rect.height);
 	}
 
+	drawCircle(position: Vec2, radius: number, color: string): void {
+		this.drawArc(position, radius, 0, 360, color);
+	}
+
+	drawCircleOutline(position: Vec2, radius: number, color: string, lineWidth?: number): void {
+		this.drawArcOutline(position, radius, 0, 360, color, lineWidth);
+	}
+
+	drawArc(position: Vec2, radius: number, startAngle: number, endAngle: number, color: string): void {
+		this.context.fillStyle = color;
+		this.context.beginPath();
+		if (this.camera) {
+			position = this.camera.toScreen2(position);
+			radius *= this.camera.scale;
+		}
+		this.context.arc(position.x, position.y, radius, startAngle * DEG2RAD, endAngle * DEG2RAD);
+		this.context.fill();
+	}
+
+	drawArcOutline(
+		position: Vec2,
+		radius: number,
+		startAngle: number,
+		endAngle: number,
+		color: string,
+		lineWidth = 1,
+	): void {
+		this.context.lineWidth = lineWidth;
+		this.context.strokeStyle = color;
+		this.context.beginPath();
+		if (this.camera) {
+			position = this.camera.toScreen2(position);
+			radius *= this.camera.scale;
+		}
+		this.context.arc(position.x, position.y, radius, startAngle * DEG2RAD, endAngle * DEG2RAD);
+		this.context.stroke();
+	}
+
+	drawEllipse(position: Vec2, radius: Vec2, color: string): void {
+		this.context.fillStyle = color;
+		const rotation = 0;
+		let { x: rx, y: ry } = radius;
+		if (this.camera) {
+			position = this.camera.toScreen2(position);
+			rx *= this.camera.scale;
+			ry *= this.camera.scale;
+		}
+		this.context.beginPath();
+		this.context.ellipse(position.x, position.y, rx, ry, rotation, 0 * DEG2RAD, 360 * DEG2RAD);
+		this.context.fill();
+	}
+
 	drawImage(src: CanvasImageSource, dx: number, dy: number, dw: number, dh: number): void {
 		let dest: Rect = { x: dx, y: dy, width: dw, height: dh };
 		if (this.camera != null) {
@@ -133,9 +202,10 @@ export class Renderer2d {
 		this.context.drawImage(src, dest.x, dest.y, dest.width, dest.height);
 	}
 
-	drawLine(start: Vec2, end: Vec2, color: string, lineWidth = 1) {
+	drawLine(start: Vec2, end: Vec2, color: string, lineWidth = 1, lineCap: CanvasLineCap = 'butt') {
 		this.context.strokeStyle = color;
 		this.context.lineWidth = lineWidth;
+		this.context.lineCap = lineCap;
 		if (this.camera) {
 			start = this.camera.toScreen2(start);
 			end = this.camera.toScreen2(end);
@@ -170,6 +240,8 @@ export class Renderer2d {
 		return metrics;
 	}
 
+	// TODO: Scale the canvas backing resolution and context by devicePixelRatio to avoid blurry high-DPI rendering.
+	// Keep layout and pointer coordinates in CSS pixels, and restore context settings after resizing.
 	resizeCanvas(width: number, height: number): void {
 		this.canvas.style.width = width + 'px';
 		this.canvas.style.height = height + 'px';
